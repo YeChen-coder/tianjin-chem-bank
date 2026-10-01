@@ -11,7 +11,7 @@ import unicodedata
 import zipfile
 from xml.etree import ElementTree as ET
 
-ROOT = "/workspace/chem-bank"
+ROOT = os.path.dirname(os.path.abspath(__file__))
 MIRROR = "/workspace/chem-papers/mirror"
 DB_PATH = os.path.join(ROOT, "bank.sqlite")
 MEDIA = os.path.join(ROOT, "media")
