@@ -1,0 +1,25 @@
+# question database
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# question images
+media/
+
+# local environment and bytecode
+venv/
+__pycache__/
+*.pyc
+.env
+
+# local logs and import reports (may contain local file paths)
+*.log
+batch-import-report.json
+import-report.json
+
+# imported papers and generated Word exports
+imports/
+*.docx
+
+# one-off local check; embeds a local file path
+verify_once.py
