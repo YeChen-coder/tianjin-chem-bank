@@ -40,6 +40,7 @@ import urllib.request
 import uuid
 
 import banklib
+import question_analysis
 
 PROMPT_VERSION = "chem-g9-v1"
 API_URL = "https://api.deepseek.com/chat/completions"
@@ -137,7 +138,7 @@ independent_answer,
 generator_answer,
 knowledge_correct（布尔）,
 conditions_sufficient（布尔）,
-answer_unique（布尔，选择题必须唯一正确项；填空若有多种等价写法且题干允许，可视为唯一）,
+answer_unique（布尔，单选题必须唯一正确项，多选题必须有明确且完整的正确选项集合；填空若有多种等价写法且题干允许，可视为唯一）,
 calculation_verified（布尔，没有计算则为 true）,
 grade_level_appropriate（布尔，超纲则为 false）,
 image_consistent（布尔，不用图或图与题一致则为 true）,
@@ -1424,11 +1425,37 @@ def _user_content(user_text, image_paths):
     return content
 
 
+def _load_local_keys():
+    """Fill empty provider env vars from keys.local next to this file.
+
+    The file is never committed. Existing environment variables win.
+    """
+    if os.environ.get("CHEM_DISABLE_AI") == "1":
+        return
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys.local")
+    if not os.path.isfile(path):
+        return
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value and not (os.environ.get(key) or "").strip():
+            os.environ[key] = value
+
+
 def _load_provider_config():
     """Read provider env vars. Values stay in memory and are never written out."""
     global _api_key, _flash_model, _pro_model
     global _glm_key, _glm_flash, _glm_pro, _glm_url
     global _ds_key, _ds_flash, _ds_pro
+    _load_local_keys()
     _glm_key = (os.environ.get("GLM_API_KEY") or "").strip()
     _glm_flash = (os.environ.get("GLM_FLASH") or "").strip() or "glm-5.3-flash"
     _glm_pro = (os.environ.get("GLM_PRO") or "").strip() or "glm-5.3"
@@ -1537,6 +1564,8 @@ def complete_role(role, system, user_text, image_paths=None):
     Returns (text, model_id) for the call that actually returned parseable JSON.
     Images are attached only on the flash / vision role.
     """
+    if os.environ.get("CHEM_DISABLE_AI") == "1":
+        raise ModelError("config")
     if role != "flash":
         image_paths = None
     if _glm_key:
@@ -1754,8 +1783,9 @@ def _profile_user(base, segments, need_image):
         "answer": base["answer"] or "",
         "has_image": need_image,
         "images": imgs,
+        "curriculum_tags": question_analysis.knowledge_info(base["body"]),
     }
-    return "下面是母题，请写题目画像。只输出 JSON。\n" + json.dumps(payload, ensure_ascii=False)
+    return question_analysis.curriculum_prompt() + "\n下面是母题，请写题目画像。只输出 JSON。\n" + json.dumps(payload, ensure_ascii=False)
 
 
 def _ensure_profile(con, session_id, base, segments):
@@ -1802,7 +1832,7 @@ def _ensure_profile(con, session_id, base, segments):
 
 
 def _generation_user(profile, image, parent, feedback, intensity, base_imgs):
-    blocks = [
+    blocks = [question_analysis.curriculum_prompt(),
         INTENSITY_TEXT.get(intensity, INTENSITY_TEXT["medium"]),
         "题目画像：\n" + json.dumps(profile, ensure_ascii=False),
     ]
@@ -1845,7 +1875,7 @@ def _judge_user(normalized, profile, image):
     if image:
         tail["image"] = image
     return (
-        "先不要看生成答案。请独立解答下面这道题，并把你的答案写入 independent_answer。\n"
+        question_analysis.curriculum_prompt() + "\n先不要看生成答案。请独立解答下面这道题，并把你的答案写入 independent_answer。\n"
         + json.dumps(question, ensure_ascii=False)
         + "\n\n独立解答之后，再对照下面的生成答案。不要改写题目。\n"
         + json.dumps(tail, ensure_ascii=False)
@@ -2277,6 +2307,8 @@ def _loop():
 
 def start_worker():
     """Start the in-process worker once. Reads API keys and model ids from the environment."""
+    if os.environ.get("CHEM_DISABLE_AI") == "1":
+        return
     global _started
     with _start_lock:
         if _started:

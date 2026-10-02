@@ -8,6 +8,9 @@ media/
 
 # local environment and bytecode
 venv/
+.venv/
+.dev/
+.pytest_cache/
 __pycache__/
 *.pyc
 .env
@@ -23,3 +26,6 @@ imports/
 
 # one-off local check; embeds a local file path
 verify_once.py
+
+# API keys for this computer only
+keys.local

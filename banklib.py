@@ -9,16 +9,22 @@ import sqlite3
 import subprocess
 import unicodedata
 import zipfile
+import tempfile
+import posixpath
+import shutil
 from xml.etree import ElementTree as ET
+import question_analysis
+import document_display
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-MIRROR = "/workspace/chem-papers/mirror"
-DB_PATH = os.path.join(ROOT, "bank.sqlite")
-MEDIA = os.path.join(ROOT, "media")
+DATA_DIR = os.path.abspath(os.environ.get("CHEM_DATA_DIR") or ROOT)
+MIRROR = os.environ.get("CHEM_MIRROR_DIR") or os.path.join(DATA_DIR, "imports")
+DB_PATH = os.path.join(DATA_DIR, "bank.sqlite")
+MEDIA = os.path.join(DATA_DIR, "media")
 MEDIA_ORIG = os.path.join(MEDIA, "original")
-IMPORT_DIR = os.path.join(ROOT, "imports")
+IMPORT_DIR = os.path.join(DATA_DIR, "imports")
 TAXONOMY_PATH = os.path.join(ROOT, "taxonomy.json")
-LO_DIR = "/tmp/chem-lo"
+LO_DIR = os.path.join(DATA_DIR, "converted")
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 M = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
@@ -32,7 +38,7 @@ SUP = {
 }
 SUB_TRANS = str.maketrans("₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₒₓₕₖₗₘₙₚₛₜ", "0123456789+-=()aeoxhklmnpst")
 
-QSTART = re.compile(r"^(\d{1,3})\s*[.．、:：]\s*(\S.*)?$", re.S)
+QSTART = re.compile(r"^\s*(\d{1,3})\s*[.．、:：)）](?!\d)\s*(\S.*)?$", re.S)
 QSTART_TI = re.compile(r"^第\s*(\d{1,3})\s*题\s*[:：.．、]?\s*(\S.*)$", re.S)
 SECTION = re.compile(
     r"^(第\s*[0-9一二三四五六七八九十百]+\s*单元|第\s*[IⅠⅡⅢIII]+\s*卷|[一二三四五六七八九十]+\s*、)"
@@ -63,7 +69,6 @@ def local(tag):
 def linearize_unicode(s):
     if not s:
         return ""
-    s = s.translate(SUB_TRANS)
     out = []
     i = 0
     n = len(s)
@@ -196,25 +201,34 @@ CATS, THRESHOLD = load_taxonomy()
 
 
 def classify(text):
-    best = None
-    best_score = 0
-    best_len = 0
-    for cat in CATS:
-        score = 0
-        longest = 0
-        for item in cat["keywords"]:
-            kw, w = item[0], int(item[1])
-            if kw and kw in text:
-                score += w
-                if len(kw) > longest:
-                    longest = len(kw)
-        if score > best_score or (score == best_score and score > 0 and longest > best_len):
-            best = cat
-            best_score = score
-            best_len = longest
-    if not best or best_score < THRESHOLD:
-        return "未分类", "未分类"
-    return best["major"], best["minor"]
+    suggestions = question_analysis.category_suggestions(text, "", CATS, THRESHOLD)
+    if suggestions:
+        return suggestions[0]["major"], suggestions[0]["minor"]
+    return "未分类", "未分类"
+
+
+def question_metadata(con, row):
+    saved = con.execute("SELECT payload FROM question_metadata WHERE question_id=?", (row["id"],)).fetchone()
+    metadata = json.loads(saved[0]) if saved else {}
+    info = question_analysis.qtype_info(row["body"], metadata.get("section_type"))
+    # After a manual edit, source section hints may no longer apply.
+    if row["body_manual"]:
+        info = question_analysis.qtype_info(row["body"])
+    warnings = list(metadata.get("warnings") or [])
+    if row["qtype_manual"]:
+        info = {"qtype": row["qtype"], "reason": "教师已确认", "confidence": "manual", "warnings": []}
+        warnings = [w for w in warnings if "题型" not in w and "选项" not in w]
+    warnings.extend(info["warnings"])
+    if not row["qtype_manual"] and info["qtype"] != row["qtype"]:
+        warnings.append("原题库题型与当前建议不同，可手动确认")
+    knowledge = question_analysis.knowledge_info(row["body"])
+    if not knowledge["points"] and not row["category_manual"]:
+        warnings.append("知识点未识别，建议确认")
+    metadata.update({"type_suggestion": info, "knowledge": knowledge,
+                     "warnings": list(dict.fromkeys(warnings)), "needs_review": bool(warnings)})
+    return metadata
+
+
 
 
 QTYPES = ("单选题", "多选题", "填空题", "简答题", "实验题", "计算题")
@@ -356,26 +370,10 @@ def _is_composite_fillin(text):
     return len(_structural_subq_numbers(t)) >= 2
 
 
-def guess_qtype(body):
-    t = body or ""
-    # A composite fill-in wins over a choice table inside one sub-part.
-    if _is_composite_fillin(t):
-        return "填空题"
-    has_choice = _choice_letters_present(t)
-    multi = bool(re.search(r"多选|不定项|多项选择|正确的有|不正确的有", t))
-    has_blank = t.count("_") >= 2
-    # Options win. 「实验」 in the stem must not turn a choice into 实验题.
-    if has_choice and multi:
-        return "多选题"
-    if has_choice:
-        return "单选题"
-    if re.search(r"计算|列式|求[出]?[^。]{0,12}质量", t):
-        return "计算题"
-    if has_blank:
-        return "填空题"
-    if re.search(r"实验|探究|装置", t):
-        return "实验题"
-    return "简答题"
+def guess_qtype(body, section=None):
+    return question_analysis.qtype_info(body, section)["qtype"]
+
+
 
 
 LABEL_MAX = 50
@@ -1069,6 +1067,7 @@ def delete_question(con, qid):
     con.execute("DELETE FROM paper_items WHERE question_id=?", (qid,))
     con.execute("DELETE FROM question_majors WHERE question_id=?", (qid,))
     con.execute("DELETE FROM question_minors WHERE question_id=?", (qid,))
+    con.execute("DELETE FROM question_metadata WHERE question_id=?", (qid,))
     con.execute("DELETE FROM questions WHERE id=?", (qid,))
     con.commit()
     return True
@@ -1801,11 +1800,16 @@ def handle_run(r, parts):
         buf.clear()
         if not s:
             return
+        fonts = r.find(W + "rPr/" + W + "rFonts")
+        if fonts is not None and "symbol" in " ".join(fonts.attrib.values()).lower():
+            s = s.translate(str.maketrans({"\uf03e": ">", "\uf03c": "<", "\uf03d": "=",
+                "\uf0b3": "≥", "\uf0a3": "≤", "\uf0ae": "→", "\uf0ad": "↑", "\uf0af": "↓",
+                "\uf044": "Δ", "\uf0b0": "°", "\uf0b1": "±", "\uf0b4": "×"}))
         if vert == "superscript":
             s = "^{" + s + "}"
         if underlined:
-            s = "".join("_" if ch in " \t\u3000" else ch for ch in s)
-        parts.append(("text", s))
+            s = "".join("__" if ch == "\u3000" else "_" if ch.isspace() and ch not in "\r\n" else ch for ch in s)
+        parts.append(("text-sub" if vert == "subscript" else "text", s))
 
     for child in list(r):
         tag = local(child.tag)
@@ -1860,7 +1864,7 @@ def walk_container(el, parts):
         elif tag in ("oMath", "oMathPara"):
             s = omml_text(child)
             if s:
-                parts.append(("text", s))
+                parts.append(("math", (s, ET.tostring(child, encoding="unicode"))))
         elif tag == "AlternateContent":
             choice = fallback = None
             for c in child:
@@ -1964,7 +1968,7 @@ def table_matrix(tbl):
             parts = []
             for bit in cell_bits(tc):
                 if parts and bit:
-                    parts.append(("text", " "))
+                    parts.append(("text", "\n"))
                 parts.extend(bit)
             cells.append(parts)
         if cells:
@@ -2016,7 +2020,7 @@ def load_rels(z):
             target = target.lstrip("/")
         elif not target.startswith("word/"):
             target = "word/" + target
-        rels[rid] = target
+        rels[rid] = posixpath.normpath(target)
     return rels
 
 
@@ -2043,8 +2047,9 @@ _image_cache = {}
 
 def save_image_bytes(data, ext):
     sha = hashlib.sha256(data).hexdigest()
-    if sha in _image_cache:
-        return _image_cache[sha]
+    cache_key = (os.path.abspath(MEDIA), sha)
+    if cache_key in _image_cache:
+        return _image_cache[cache_key]
     ext = (ext or "").lower()
     if ext == ".jpeg":
         ext = ".jpg"
@@ -2062,12 +2067,18 @@ def save_image_bytes(data, ext):
         png_path = os.path.join(MEDIA, sha + ".png")
         if not os.path.exists(png_path) or os.path.getsize(png_path) < 20:
             try:
+                if os.name == "nt":
+                    command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-File",
+                               os.path.join(ROOT, "scripts", "convert_metafile.ps1"),
+                               "-InputPath", orig_path, "-OutputPath", png_path]
+                else:
+                    executable = shutil.which("magick")
+                    if not executable:
+                        raise RuntimeError("No metafile preview converter")
+                    command = [executable, "-density", "144", orig_path, "-background", "white",
+                               "-alpha", "remove", "-alpha", "off", "-resize", "1400x1400>", "png:" + png_path]
                 subprocess.run(
-                    [
-                        "convert", "-density", "144", orig_path,
-                        "-background", "white", "-alpha", "remove", "-alpha", "off",
-                        "-resize", "1400x1400>", "png:" + png_path,
-                    ],
+                    command,
                     check=True, timeout=40,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
@@ -2083,7 +2094,7 @@ def save_image_bytes(data, ext):
                 f.write(data)
         preview = sha + ext
     info = {"sha": sha, "src": "/media/" + preview, "preview": preview, "orig_ext": ext}
-    _image_cache[sha] = info
+    _image_cache[cache_key] = info
     return info
 
 
@@ -2099,16 +2110,26 @@ def fill_blank_spaces(s):
     return _BLANK_RUN.sub(repl, s)
 
 
-def resolve_parts(raw_parts, z, rels):
+def resolve_parts(raw_parts, z, rels, warnings=None):
     out = []
     for kind, val in raw_parts:
-        if kind == "text":
+        if kind in ("text", "text-sub", "math"):
+            formula = None
+            if kind == "math":
+                val, formula = val
             s = fill_blank_spaces(linearize_unicode(val))
             if s:
-                out.append({"t": "text", "s": s})
+                part = {"t": "text", "s": s}
+                if kind == "text-sub":
+                    part["vert"] = "subscript"
+                if formula:
+                    part["omml"] = formula
+                out.append(part)
         elif kind == "img":
             target = rels.get(val)
             if not target or target not in z.namelist():
+                if warnings is not None:
+                    warnings.append("图片关系缺失或是外部链接，需核对原 Word")
                 continue
             low = target.lower()
             if low.endswith(".bin") or "/embeddings/" in low:
@@ -2118,7 +2139,9 @@ def resolve_parts(raw_parts, z, rels):
                 continue
             ext = os.path.splitext(target)[1].lower() or sniff_ext(data, "")
             info = save_image_bytes(data, ext)
-            out.append({"t": "img", "sha": info["sha"], "src": info["src"]})
+            out.append({"t": "img", "sha": info["sha"], "src": info["src"], "orig_ext": info["orig_ext"]})
+            if warnings is not None and info["preview"].endswith((".wmf", ".emf")):
+                warnings.append("矢量图预览不可用，原图保留用于 Word 导出，请核对原卷")
     return out
 
 
@@ -2142,10 +2165,10 @@ def split_answer(parts):
         else:
             hit = True
             if s[:m.start()].strip():
-                body.append({"t": "text", "s": s[:m.start()]})
+                body.append(dict(p, s=s[:m.start()]))
             rest = s[m.start():]
             if rest:
-                answer.append({"t": "text", "s": rest})
+                answer.append(dict(p, s=rest))
     if not hit:
         return parts, None
     return body, answer
@@ -2206,7 +2229,7 @@ QTYPE_HEADER = re.compile(
     r"(?:不定项选择题|单选题|多选题|填空题|简答题|实验题|计算题|选择题)"
     r"\s*(?:[（(][^）)\n]{0,16}[）)])?\s*$"
 )
-_EMB_Q = re.compile(r"(?:^|\n)[ \t\u3000]*(\d{1,3})\s*[.．、:：]")
+_EMB_Q = re.compile(r"(?:^|\n)[ \t\u3000]*(\d{1,3})\s*[.．、:：)）](?!\d)")
 _EMB_SEC = re.compile(
     r"(?:^|\n)[ \t\u3000]*(?:[一二三四五六七八九十]+\s*[、.．:：]\s*)?"
     r"(?:不定项选择题|单选题|多选题|填空题|简答题|实验题|计算题|选择题)"
@@ -2219,7 +2242,7 @@ def _slice_parts(parts, a, b):
     pos = 0
     for part in parts:
         if part.get("t") != "text":
-            if a <= pos < b:
+            if a <= pos < b or (pos == b == len(_raw_para(parts))):
                 out.append(part)
             continue
         s = part.get("s") or ""
@@ -2254,6 +2277,9 @@ def split_glued_paragraph(parts, cur):
     if cur and str(cur.get("qnum") or "").isdigit():
         cur_n = int(cur["qnum"])
     bounds = {0, len(raw)}
+    first_number = QSTART.match(raw) or QSTART_TI.match(raw)
+    if first_number:
+        cur_n = int(first_number.group(1))
     for m in _EMB_SEC.finditer(raw):
         if m.start() > 0:
             bounds.add(m.start())
@@ -2274,141 +2300,10 @@ def split_glued_paragraph(parts, cur):
     return chunks or [parts]
 
 def questions_from_docx(path):
-    z = zipfile.ZipFile(path)
-    try:
-        root = ET.fromstring(z.read("word/document.xml"))
-    except KeyError as e:
-        raise RuntimeError("no word/document.xml") from e
-    rels = load_rels(z)
-    body = None
-    for child in root:
-        if local(child.tag) == "body":
-            body = child
-            break
-    if body is None:
-        raise RuntimeError("no body")
+    from docx_import import parse_docx
+    return parse_docx(path)
 
-    raw_blocks = []
-    for block in iter_block_items(body):
-        if local(block.tag) == "p":
-            parts = resolve_parts(paragraph_parts(block), z, rels)
-            raw_blocks.append(("p", parts))
-        else:
-            rows = []
-            for raw_row in table_matrix(block):
-                rows.append([resolve_parts(cell, z, rels) for cell in raw_row])
-            if rows:
-                raw_blocks.append(("tbl", {"t": "table", "rows": rows}))
 
-    questions = []
-    cur = None
-    started = False
-
-    def flush():
-        nonlocal cur
-        if cur is None:
-            return
-        body_paras = [p for p in cur["body"] if item_nonempty(p)]
-        ans_paras = [p for p in cur["answer"] if item_nonempty(p)]
-        body_paras, ans_paras = rehome_dumped_choices(body_paras, ans_paras)
-        if guess_qtype("\n".join(item_plain(p) for p in body_paras)) in ("单选题", "多选题"):
-            normalize_choice_segments(body_paras)
-        body = "\n".join(item_plain(p) for p in body_paras).strip()
-        answer = "\n".join(item_plain(p) for p in ans_paras).strip()
-        imgs = []
-        for para in body_paras:
-            imgs.extend(item_imgs(para))
-        qnum = cur.get("qnum") or ""
-        cur = None
-        compact = re.sub(r"\s+", "", body)
-        if len(compact) < 6 and not imgs:
-            return
-        if (not qnum) and ((body.lstrip().startswith(("（", "(", "【"))) or (len(compact) < 18)):
-            return
-        questions.append({
-            "qnum": qnum,
-            "body": body,
-            "answer": answer,
-            "segments": body_paras,
-            "answer_segments": ans_paras,
-            "images": imgs,
-        })
-
-    def start_q(qnum, parts):
-        nonlocal cur, started
-        flush()
-        started = True
-        b, a = split_answer(parts)
-        strip_leading_qnum(b)
-        cur = {"body": [], "answer": [], "in_answer": False, "qnum": qnum or ""}
-        if nonempty(b):
-            cur["body"].append(b)
-        if a is not None:
-            if nonempty(a):
-                cur["answer"].append(a)
-            cur["in_answer"] = True
-
-    def take_paragraph(parts):
-        nonlocal cur, started
-        text = para_text(parts)
-        if not text and not any(p["t"] == "img" for p in parts):
-            return
-        if text and (SECTION.match(text) or SKIP_LINE.match(text)):
-            if SECTION.match(text):
-                flush()
-                cur = None
-                started = True
-            return
-        if text and QTYPE_HEADER.match(text.strip()):
-            flush()
-            cur = None
-            started = True
-            return
-        mnum = (QSTART.match(text) or QSTART_TI.match(text)) if text else None
-        if mnum:
-            rest = (mnum.group(2) or "").strip()
-            bare = bool(re.fullmatch(r"\d{1,3}\s*[.．、:：]\s*", text.strip()))
-            if is_reject(rest) or (len(rest) < 2 and not bare):
-                return
-            start_q(mnum.group(1), parts)
-            return
-        if cur is None:
-            if started and len(text) >= 12:
-                start_q("", parts)
-            return
-        b, a = split_answer(parts)
-        if a is not None and not nonempty(b):
-            cur["in_answer"] = True
-            if nonempty(a):
-                cur["answer"].append(a)
-            return
-        if a is not None:
-            if nonempty(b):
-                cur["body"].append(b)
-            cur["in_answer"] = True
-            if nonempty(a):
-                cur["answer"].append(a)
-            return
-        if cur.get("in_answer"):
-            if nonempty(parts):
-                cur["answer"].append(parts)
-            return
-        if nonempty(parts):
-            cur["body"].append(parts)
-
-    for kind, data in raw_blocks:
-        if kind == "tbl":
-            if cur is None:
-                continue
-            if cur.get("in_answer"):
-                cur["answer"].append(data)
-            else:
-                cur["body"].append(data)
-            continue
-        for chunk in split_glued_paragraph(data, cur):
-            take_paragraph(chunk)
-    flush()
-    return questions
 
 
 def norm_key(body, images):
@@ -2421,7 +2316,7 @@ def norm_key(body, images):
 
 
 def init_db():
-    os.makedirs(ROOT, exist_ok=True)
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     con = sqlite3.connect(DB_PATH)
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(
@@ -2500,6 +2395,9 @@ def init_db():
         """
     )
     seed_categories(con)
+    con.execute("""CREATE TABLE IF NOT EXISTS question_metadata (
+        question_id INTEGER PRIMARY KEY, payload TEXT NOT NULL,
+        needs_review INTEGER NOT NULL DEFAULT 0)""")
     ensure_paper_schema(con)
     import aivariant
     aivariant.ensure_schema(con)
@@ -2509,10 +2407,7 @@ def init_db():
 
 
 def source_label(rel_path, qnum):
-    qnum = (qnum or "").strip()
-    if qnum:
-        return rel_path + "（原题号 " + qnum + "）"
-    return rel_path
+    return document_display.source_info(rel_path, qnum, (DATA_DIR, ROOT, MIRROR))["label"]
 
 
 def insert_questions(con, rel_path, questions, manual=None, manual_qtype=None, manual_body=None):
@@ -2537,12 +2432,14 @@ def insert_questions(con, rel_path, questions, manual=None, manual_qtype=None, m
     ids = []
     for q in questions:
         key = norm_key(q["body"], q["images"])
-        guessed_major, guessed_minor = classify((q["body"] or "") + "\n" + (q["answer"] or ""))
+        suggestions = question_analysis.category_suggestions(q["body"], q["answer"], CATS, THRESHOLD)
+        guessed_major, guessed_minor = ((suggestions[0]["major"], suggestions[0]["minor"])
+                                       if suggestions else ("未分类", "未分类"))
         if key in manual_qtype:
             qtype = manual_qtype[key]
             qflag = 1
         else:
-            qtype = guess_qtype(q["body"])
+            qtype = q.get("qtype") or guess_qtype(q["body"], q.get("section_type"))
             qflag = 0
         row = con.execute(
             "SELECT id FROM questions WHERE dedup_key=?", (key,)
@@ -2568,7 +2465,8 @@ def insert_questions(con, rel_path, questions, manual=None, manual_qtype=None, m
                 flag = 1
             else:
                 major, minor = guessed_major, guessed_minor
-                majors, minors = [major], [minor]
+                majors = list(dict.fromkeys(c["major"] for c in suggestions)) or [major]
+                minors = list(dict.fromkeys(c["minor"] for c in suggestions)) or [minor]
                 flag = 0
             ensure_category(con, major, minor)
             for mj in majors:
@@ -2601,6 +2499,12 @@ def insert_questions(con, rel_path, questions, manual=None, manual_qtype=None, m
             qid = cur.lastrowid
             new_u += 1
             set_question_labels(con, qid, majors, minors)
+            metadata = {"section_type": q.get("section_type"), "warnings": q.get("warnings") or [],
+                        "answer_segments": q.get("answer_segments") or [], "categories": suggestions,
+                        "type_suggestion": q.get("type_suggestion") or question_analysis.qtype_info(q["body"]),
+                        "knowledge": question_analysis.knowledge_info(q["body"])}
+            con.execute("INSERT INTO question_metadata(question_id,payload,needs_review) VALUES(?,?,?)",
+                        (qid, json.dumps(metadata, ensure_ascii=False), int(bool(metadata["warnings"])) ))
         con.execute(
             "INSERT OR IGNORE INTO sources (question_id, rel_path, orig_qnum) VALUES (?,?,?)",
             (qid, rel_path, q.get("qnum") or ""),
@@ -2646,16 +2550,22 @@ def ensure_docx(path):
         except zipfile.BadZipFile:
             pass
     os.makedirs(LO_DIR, exist_ok=True)
+    with open(path, "rb") as source:
+        stamp = hashlib.sha256(source.read()).hexdigest()[:12]
     base = os.path.splitext(os.path.basename(path))[0] + ".docx"
-    out = os.path.join(LO_DIR, base)
+    task_dir = os.path.join(LO_DIR, stamp)
+    os.makedirs(task_dir, exist_ok=True)
+    out = os.path.join(task_dir, base)
     if os.path.exists(out) and os.path.getsize(out) > 1000:
         return out, None
-    env = os.environ.copy()
-    env["HOME"] = "/tmp/soffice-home"
-    os.makedirs(env["HOME"], exist_ok=True)
+    executable = shutil.which("soffice") or shutil.which("soffice.exe")
+    if not executable:
+        raise RuntimeError("此环境没有 LibreOffice，旧版 .doc 请先在 Word 中另存为 .docx")
+    from pathlib import Path
+    profile = Path(task_dir, "lo-profile").resolve().as_uri()
     r = subprocess.run(
-        ["soffice", "--headless", "--norestore", "--convert-to", "docx", "--outdir", LO_DIR, path],
-        env=env, timeout=180, capture_output=True, text=True,
+        [executable, "-env:UserInstallation=" + profile, "--headless", "--norestore", "--convert-to", "docx", "--outdir", task_dir, path],
+        timeout=180, capture_output=True, text=True,
     )
     if not os.path.exists(out):
         raise RuntimeError("libreoffice failed: " + (r.stderr or r.stdout or "")[-400:])
@@ -2663,17 +2573,11 @@ def ensure_docx(path):
 
 
 def import_papers(limit=20):
+    """Incremental batch import; retain ids, composed papers and manual edits."""
     con = init_db()
-    # Full reimport deletes rows. Keep hand-saved categories by dedup_key.
     manual = snapshot_manual(con)
     manual_qtype = snapshot_qtype(con)
     manual_body = snapshot_body(con)
-    con.execute("DELETE FROM question_majors")
-    con.execute("DELETE FROM question_minors")
-    con.execute("DELETE FROM questions")
-    con.execute("DELETE FROM sources")
-    con.execute("DELETE FROM imports")
-    con.commit()
     global _image_cache
     _image_cache = {}
     # rebuild cache from existing media so re-runs don't reconvert if files remain
@@ -3100,7 +3004,10 @@ def import_one(path, rel_path, paper_id=None):
             continue
         seen.add(qid)
         ordered.append(qid)
-    out = {"parsed": len(qs), "new": new_u, "merged": merged, "question_ids": ordered}
+    reviews = [{"question_id": qid, "qnum": q.get("qnum"), "warnings": q.get("warnings") or []}
+               for qid, q in zip(ids, qs) if q.get("warnings")]
+    out = {"parsed": len(qs), "new": new_u, "merged": merged, "question_ids": ordered,
+           "review_count": len(reviews), "reviews": reviews}
     if paper is not None:
         out["paper"] = paper
         out["added_to_paper"] = added
@@ -3153,11 +3060,15 @@ def png_size(path):
 
 
 def source_labels(con, qid):
+    return [source["label"] for source in source_details(con, qid)]
+
+
+def source_details(con, qid):
     rows = con.execute(
         "SELECT rel_path, COALESCE(orig_qnum, '') FROM sources WHERE question_id=? ORDER BY id",
         (qid,),
     )
-    return [source_label(a, b) for a, b in rows]
+    return [document_display.source_info(a, b, (DATA_DIR, ROOT, MIRROR)) for a, b in rows]
 
 
 def export_docx(question_ids, dest, keep_source=False, auto_number=True):
@@ -3194,14 +3105,44 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True):
             run.font.color.rgb = RGBColor(*color)
 
     def write_parts(paragraph, parts):
-        for part in parts:
+        for part in document_display.presentation_parts(parts):
             if part.get("t") == "text":
-                r = paragraph.add_run(part.get("s") or "")
-                font_run(r)
+                if part.get("omml"):
+                    from docx.oxml import parse_xml
+                    paragraph._p.append(parse_xml(part["omml"]))
+                    continue
+                tokens = r"(\^\{[^{}]+\}|" + document_display.BLANK.pattern + r")"
+                for chunk in re.split(tokens, part.get("s") or ""):
+                    if not chunk:
+                        continue
+                    sup = chunk.startswith("^{") and chunk.endswith("}")
+                    blank = not sup and document_display.BLANK.fullmatch(chunk)
+                    text = "\u00a0" * document_display.blank_length(chunk) if blank else chunk[2:-1] if sup else chunk
+                    r = paragraph.add_run(text)
+                    font_run(r)
+                    r.font.superscript = sup
+                    if blank:
+                        r.font.underline = True
+                    if part.get("vert") == "subscript":
+                        r.font.subscript = True
             elif part.get("t") == "img":
                 src = part.get("src") or ""
                 fn = src.split("/")[-1]
                 path = os.path.join(MEDIA, fn)
+                sha = part.get("sha") or fn.split(".")[0]
+                originals = [os.path.join(MEDIA_ORIG, sha + ext) for ext in (".wmf", ".emf")]
+                vector = next((p for p in originals if os.path.isfile(p)), None)
+                if vector:
+                    from word_export import add_vector
+                    if os.path.isfile(path) and path.endswith(".png"):
+                        dim = png_size(path)
+                    else:
+                        dim = None
+                    width = Inches(min(5.2, max(0.35, dim[0] / 144.0))) if dim else Inches(4.2)
+                    picture = add_vector(paragraph, vector, width)
+                    if dim and dim[0]:
+                        picture.height = int(width * dim[1] / dim[0])
+                    continue
                 if os.path.exists(path):
                     dim = png_size(path)
                     width = Inches(4.2)
@@ -3209,16 +3150,25 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True):
                         width = Inches(min(5.2, max(0.35, dim[0] / 144.0)))
                     try:
                         paragraph.add_run().add_picture(path, width=width)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        con.close()
+                        raise RuntimeError("图片无法写入 Word，请先修复或转换图片：" + fn) from exc
+                else:
+                    con.close()
+                    raise RuntimeError("题目图片缺失，已停止导出：" + fn)
 
     n = 0
     for qid in question_ids:
         row = con.execute("SELECT * FROM questions WHERE id=?", (int(qid),)).fetchone()
         if not row:
-            continue
+            con.close()
+            raise RuntimeError("题目不存在，已停止导出：%s" % qid)
         n += 1
         segs = json.loads(row["segments"] or "[]")
+        metadata = question_metadata(con, row)
+        if any("图片关系缺失" in w or "未能读取的嵌入对象" in w for w in metadata["warnings"]):
+            con.close()
+            raise RuntimeError("题目存在未读取的图片或公式，请核对并修复后导出（题目 %s）" % qid)
         sources = source_labels(con, row["id"])
         first = True
         for para in segs:
@@ -3249,30 +3199,33 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True):
             p = doc.add_paragraph()
             p.paragraph_format.space_after = Pt(2)
             p.paragraph_format.space_before = Pt(0)
+            output_parts = []
             for part in para:
                 if part.get("t") == "text" and first:
                     stext = part.get("s") or ""
                     if auto_number:
                         stext = re.sub(r"^\d{1,3}\s*[.．、:：]\s*", "", stext, count=1)
                         stext = f"{n}. " + stext
-                    part = {"t": "text", "s": stext}
+                    if auto_number and part.get("omml"):
+                        output_parts.append({"t": "text", "s": f"{n}. "})
+                        stext = part.get("s") or ""
+                    part = dict(part, s=stext)
                     first = False
-                    write_parts(p, [part])
+                    output_parts.append(part)
                 elif part.get("t") == "img" and first:
                     if auto_number:
-                        r = p.add_run(f"{n}. ")
-                        font_run(r)
+                        output_parts.append({"t": "text", "s": f"{n}. "})
                     first = False
-                    write_parts(p, [part])
+                    output_parts.append(part)
                 else:
-                    write_parts(p, [part])
+                    output_parts.append(part)
+            write_parts(p, output_parts)
         if first:
             p = doc.add_paragraph()
             body = row["body"] or ""
             if auto_number:
                 body = f"{n}. " + re.sub(r"^\d{1,3}\s*[.．、:：]\s*", "", body, count=1)
-            r = p.add_run(body)
-            font_run(r)
+            write_parts(p, [{"t": "text", "s": body}])
         if keep_source and sources:
             sp = doc.add_paragraph()
             sp.paragraph_format.space_before = Pt(2)

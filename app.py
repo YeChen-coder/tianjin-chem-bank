@@ -12,9 +12,10 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(__file__))
 import banklib
 import aivariant
+import question_analysis
 
 HOST = "127.0.0.1"
-PORT = 8765
+PORT = int(os.environ.get("CHEM_PORT") or 8765)
 LOCK = threading.Lock()
 
 PAGE = r"""<!DOCTYPE html>
@@ -81,6 +82,7 @@ PAGE = r"""<!DOCTYPE html>
   .stemedit .imgtools { margin-top: 4px; }
   article .meta { font-size: 12px; color: #667; margin-bottom: 6px; }
   .stem { white-space: pre-wrap; line-height: 1.55; font-size: 15px; }
+  .answerblank { display: inline-block; border-bottom: 1px solid currentColor; height: 1em; vertical-align: baseline; max-width: 100%; }
   .stem table { border-collapse: collapse; background: #fff; margin: 6px 0; max-width: 100%; }
   .stem td { border: 1px solid #b7b7b7; padding: 4px 8px; vertical-align: top; white-space: pre-wrap; }
   label.keep { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #223; }
@@ -138,6 +140,8 @@ PAGE = r"""<!DOCTYPE html>
   <input id="q" type="search" placeholder="搜索题干、来源文件、原题号…"/>
   <select id="major"><option value="">全部大类</option></select>
   <select id="minor"><option value="">全部小类</option></select>
+  <select id="theme" aria-label="课标学习主题"><option value="">全部课标主题</option></select>
+  <select id="knowledge" aria-label="知识点建议"><option value="">全部知识点建议</option></select>
   <button id="search" type="button">筛选</button>
   <button id="export" type="button">把勾选好的题目导出为word</button>
   <input id="papername" type="text" maxlength="80" placeholder="试卷名称，留空保存为未命名试卷"/>
@@ -245,6 +249,59 @@ let total = 0;
 function esc(s) {
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+function appendChemText(parent, part) {
+  const target = part.vert === 'subscript' ? document.createElement('sub') : parent;
+  if (target !== parent) parent.appendChild(target);
+  (part.s || '').split(/(\^\{[^{}]+\}|_(?:[ \t\u00a0\u2000-\u200a\u202f\u3000]*_)*)/g).forEach(chunk => {
+    if (chunk.startsWith('^{') && chunk.endsWith('}')) {
+      const sup = document.createElement('sup');
+      sup.textContent = chunk.slice(2, -1);
+      target.appendChild(sup);
+    } else if (chunk.startsWith('_')) {
+      const blank = document.createElement('span');
+      blank.className = 'answerblank';
+      blank.setAttribute('role', 'img');
+      blank.setAttribute('aria-label', '答题空');
+      const length = [...chunk].reduce((n, c) => n + (c === '\u3000' ? 2 : 1), 0);
+      blank.style.width = (length * 0.5) + 'em';
+      target.appendChild(blank);
+    } else target.appendChild(document.createTextNode(chunk));
+  });
+}
+function appendQuestionParts(parent, parts, safeImages = false) {
+  const merged = [];
+  (parts || []).forEach(part => {
+    if (!part) return;
+    const last = merged[merged.length - 1];
+    if (last && part.t === 'text' && last.t === 'text' && !part.omml && !last.omml && part.vert === last.vert) {
+      last.s = (last.s || '') + (part.s || '');
+    } else merged.push({...part});
+  });
+  merged.forEach(part => {
+    if (part.t === 'text') appendChemText(parent, part);
+    else if (part.t === 'img' && part.src && (!safeImages || aiSafeSrc(part.src))) {
+      const img = document.createElement('img');
+      img.src = part.src; img.alt = '题目图片';
+      parent.appendChild(img);
+    }
+  });
+}
+let curriculum = null;
+async function loadCurriculum() {
+  const r = await fetch('/api/curriculum');
+  curriculum = await r.json();
+  const theme = document.getElementById('theme');
+  curriculum.themes.forEach(name => theme.add(new Option(name, name)));
+  function refresh() {
+    const knowledge = document.getElementById('knowledge');
+    knowledge.replaceChildren(new Option('全部知识点建议', ''));
+    curriculum.points.filter(p => !theme.value || p.theme === theme.value).forEach(p => knowledge.add(new Option(p.name, p.id)));
+  }
+  theme.onchange = () => { refresh(); offset = 0; load(); };
+  document.getElementById('knowledge').onchange = () => { offset = 0; load(); };
+  refresh();
+}
+loadCurriculum().catch(() => {});
 function paintPick(el, on) {
   if (!el) return;
   el.classList.toggle('pick-on', !!on);
@@ -366,6 +423,18 @@ function renderQuestion(item) {
   const cat = document.createElement('div');
   cat.className = 'qtypebar';
   fillQtype(cat, item);
+  if (item.metadata) {
+    const info = document.createElement('details');
+    const summary = document.createElement('summary');
+    const points = (item.metadata.knowledge || {}).points || [];
+    const warnings = item.metadata.warnings || [];
+    summary.textContent = warnings.length ? '待核对：' + warnings.join('；') : '查看识别依据与知识点建议';
+    const details = document.createElement('p');
+    details.textContent = '题型依据：' + ((item.metadata.type_suggestion || {}).reason || '教师指定')
+      + '。知识点建议：' + (points.map(p => p.name).join('、') || '未识别') + '。标签供检索使用。';
+    info.append(summary, details);
+    cat.appendChild(info);
+  }
   const edit = document.createElement('div');
   edit.className = 'catedit';
   edit.addEventListener('click', (e) => e.stopPropagation());
@@ -492,15 +561,7 @@ function renderQuestion(item) {
   const stem = document.createElement('div');
   stem.className = 'stem';
   function addParts(parent, parts) {
-    (parts || []).forEach(part => {
-      if (part.t === 'text') parent.appendChild(document.createTextNode(part.s || ''));
-      else if (part.t === 'img' && part.src) {
-        const img = document.createElement('img');
-        img.src = part.src;
-        img.alt = '题目图片';
-        parent.appendChild(img);
-      }
-    });
+    appendQuestionParts(parent, parts);
   }
   (item.segments || []).forEach(para => {
     if (para && para.t === 'table') {
@@ -522,16 +583,28 @@ function renderQuestion(item) {
     stem.appendChild(line);
   });
   if (!item.segments || !item.segments.length) {
-    stem.textContent = item.body || '';
+    appendChemText(stem, {s: item.body || ''});
   }
   const src = document.createElement('div');
   src.className = 'src';
   const b = document.createElement('b');
   b.textContent = '文件来源：';
   src.appendChild(b);
-  src.appendChild(document.createTextNode((item.sources || []).join('；')));
+  if (item.source_details && item.source_details.length) {
+    item.source_details.forEach((source, i) => {
+      if (i) src.appendChild(document.createTextNode('；'));
+      const label = document.createElement('span');
+      label.textContent = source.label;
+      label.title = source.rel_path;
+      src.appendChild(label);
+    });
+  } else src.appendChild(document.createTextNode((item.sources || []).join('；')));
   holder.appendChild(cat);
-  holder.appendChild(edit);
+  const categoryPanel = document.createElement('details');
+  const categorySummary = document.createElement('summary');
+  categorySummary.textContent = '分类：' + startMin.join('、') + ' · 点击修改';
+  categoryPanel.append(categorySummary, edit);
+  holder.appendChild(categoryPanel);
   holder.appendChild(stem);
   holder.appendChild(src);
   if (item.answer) {
@@ -1089,6 +1162,8 @@ async function load() {
     u.searchParams.set('q', q.value.trim());
     u.searchParams.set('major', major.value);
     u.searchParams.set('minor', minor.value);
+    u.searchParams.set('theme', document.getElementById('theme').value);
+    u.searchParams.set('knowledge', document.getElementById('knowledge').value);
     const types = [...document.querySelectorAll('#types input:checked')].map(el => el.value);
     if (types.length) u.searchParams.set('types', types.join(','));
     u.searchParams.set('offset', offset);
@@ -1160,7 +1235,7 @@ document.getElementById('export').onclick = async () => {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ids: [...picked], keep_source: document.getElementById('keepsrc').checked, auto_number: document.getElementById('autonum').checked})
   });
-  if (!r.ok) { alert('导出失败'); return; }
+  if (!r.ok) { const error = await r.json().catch(() => ({})); alert(error.error || '导出失败'); return; }
   const blob = await r.blob();
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1177,6 +1252,7 @@ document.getElementById('file').onchange = async (e) => {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) { alert(data.error || '导入失败'); e.target.value = ''; return; }
   let msg = '已导入，新题 ' + (data.new || 0) + '，合并重复 ' + (data.merged || 0);
+  if (data.review_count) msg += '\n其中 ' + data.review_count + ' 题需要核对。每道题上方可查看识别提醒。';
   if (data.paper) {
     msg += '，已加入正在编辑的试卷 ' + (data.added_to_paper || 0) + ' 题（卷上已有的不重复添加）';
     (data.question_ids || []).forEach(qid => picked.add(qid));
@@ -1461,7 +1537,7 @@ document.getElementById('exportpaper').onclick = async () => {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ids: ids, keep_source: document.getElementById('keepsrc').checked, auto_number: document.getElementById('autonum').checked})
   });
-  if (!r.ok) { alert('导出失败'); return; }
+  if (!r.ok) { const error = await r.json().catch(() => ({})); alert(error.error || '导出失败'); return; }
   const blob = await r.blob();
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1615,16 +1691,7 @@ function aiSafeSrc(src) {
 }
 function aiFillStem(stem, segments, body) {
   function addParts(parent, parts) {
-    (parts || []).forEach(part => {
-      if (!part) return;
-      if (part.t === 'text') parent.appendChild(document.createTextNode(part.s || ''));
-      else if (part.t === 'img' && aiSafeSrc(part.src)) {
-        const img = document.createElement('img');
-        img.src = part.src;
-        img.alt = '题目图片';
-        parent.appendChild(img);
-      }
-    });
+    appendQuestionParts(parent, parts, true);
   }
   (segments || []).forEach(para => {
     if (para && para.t === 'table') {
@@ -1645,7 +1712,7 @@ function aiFillStem(stem, segments, body) {
     addParts(line, para);
     stem.appendChild(line);
   });
-  if (!segments || !segments.length) stem.textContent = body || '';
+  if (!segments || !segments.length) appendChemText(stem, {s: body || ''});
 }
 function aiIntensitySelect(value) {
   const sel = document.createElement('select');
@@ -2215,6 +2282,12 @@ def _ai_send(handler, code, payload):
 
 
 def _handle_ai_post(handler, path, raw):
+    if os.environ.get("CHEM_DISABLE_AI") == "1" and (
+        path.endswith("/ai-variants") or path.startswith("/api/ai-versions/")
+        or path.endswith("/ai-generate") or path.endswith("/ai-regenerate")
+        or path.endswith("/ai-branch")):
+        _ai_send(handler, 400, {"error": "隔离开发预览已停用 AI，请在正式环境配置后使用"})
+        return True
     if path == "/api/ai/stop-all":
         with LOCK:
             con = db()
@@ -2383,7 +2456,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            self._send(200, PAGE, "text/html; charset=utf-8")
+            page = PAGE
+            if os.environ.get("CHEM_DISABLE_AI") == "1":
+                page = page.replace("天津 · 个人题库 · 勾选题目后可导出 Word 试卷",
+                                    "隔离开发预览 · 使用独立题库 · AI 已停用")
+            self._send(200, page, "text/html; charset=utf-8")
+            return
+        if u.path == "/api/curriculum":
+            self._send(200, json.dumps(question_analysis.CURRICULUM, ensure_ascii=False), "application/json; charset=utf-8")
             return
         if u.path == "/api/categories":
             with LOCK:
@@ -2499,6 +2579,18 @@ class Handler(BaseHTTPRequestHandler):
             if minor and not paper_mode:
                 sql += " AND (minor=? OR id IN (SELECT question_id FROM question_minors WHERE minor=?))"
                 args.extend([minor, minor])
+            if not paper_mode:
+                theme = (qs.get("theme") or [""])[0]
+                point_id = (qs.get("knowledge") or [""])[0]
+                if theme or point_id:
+                    points = [p for p in question_analysis.CURRICULUM["points"]
+                              if (not theme or p["theme"] == theme) and (not point_id or p["id"] == point_id)]
+                    keywords = list(dict.fromkeys(kw for p in points for kw in p["keywords"]))
+                    if keywords:
+                        sql += " AND (" + " OR ".join("instr(lower(body), lower(?)) > 0" for kw in keywords) + ")"
+                        args.extend(keywords)
+                    else:
+                        sql += " AND 0"
             types = [x.strip() for x in (qs.get("types") or [""])[0].split(",") if x.strip()]
             types = [x for x in types if x in banklib.QTYPES]
             if types and not paper_mode:
@@ -2516,10 +2608,12 @@ class Handler(BaseHTTPRequestHandler):
                     rows = con.execute(sql + " ORDER BY id LIMIT ? OFFSET ?", args + [limit, offset]).fetchall()
                 items = []
                 for row in rows:
-                    sources = banklib.source_labels(con, row["id"])
+                    source_details = banklib.source_details(con, row["id"])
+                    sources = [source["label"] for source in source_details]
                     majors, minors = banklib.load_labels(con, row["id"], row["major"], row["minor"])
                     items.append({
                         "id": row["id"],
+                        "metadata": banklib.question_metadata(con, row),
                         "qnum": row["qnum"],
                         "body": row["body"],
                         "answer": row["answer"],
@@ -2534,6 +2628,7 @@ class Handler(BaseHTTPRequestHandler):
                         "body_manual": row["body_manual"] if "body_manual" in row.keys() else 0,
                         "category_manual": row["category_manual"] if "category_manual" in row.keys() else 0,
                         "sources": sources,
+                        "source_details": source_details,
                         "origin": (row["origin"] if "origin" in row.keys() and row["origin"] else "human"),
                         "in_bank": (0 if "in_bank" in row.keys() and row["in_bank"] is not None and int(row["in_bank"]) == 0 else 1),
                         "base_question_id": (row["base_question_id"] if "base_question_id" in row.keys() else None),
@@ -2612,17 +2707,20 @@ class Handler(BaseHTTPRequestHandler):
                     con.close()
                     self._send(404, json.dumps({"error": "not found"}), "application/json")
                     return
-                sources = banklib.source_labels(con, qid)
+                source_details = banklib.source_details(con, qid)
+                sources = [source["label"] for source in source_details]
+                metadata = banklib.question_metadata(con, row)
                 con.close()
             payload = {
                 "id": row["id"], "body": row["body"], "answer": row["answer"],
+                "metadata": metadata,
                 "segments": json.loads(row["segments"] or "[]"),
                 "major": row["major"], "minor": row["minor"],
                 "qtype": row["qtype"] if "qtype" in row.keys() else "",
                 "qtype_manual": row["qtype_manual"] if "qtype_manual" in row.keys() else 0,
                 "body_manual": row["body_manual"] if "body_manual" in row.keys() else 0,
                 "category_manual": row["category_manual"] if "category_manual" in row.keys() else 0,
-                "sources": sources, "image_count": row["image_count"],
+                "sources": sources, "source_details": source_details, "image_count": row["image_count"],
                 "origin": (row["origin"] if "origin" in row.keys() and row["origin"] else "human"),
                 "in_bank": (0 if "in_bank" in row.keys() and row["in_bank"] is not None and int(row["in_bank"]) == 0 else 1),
                 "base_question_id": (row["base_question_id"] if "base_question_id" in row.keys() else None),
@@ -2738,7 +2836,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = json.loads(raw.decode("utf-8") or "{}")
                 ids = payload.get("ids") or []
-                ids = [int(i) for i in ids][:80]
+                ids = list(dict.fromkeys(int(i) for i in ids))
+                if len(ids) > 500:
+                    self._send(400, json.dumps({"error": "单次最多导出 500 题，请分成多套试卷"}, ensure_ascii=False), "application/json; charset=utf-8")
+                    return
                 keep_source = bool(payload.get("keep_source"))
                 auto_number = True if "auto_number" not in payload else bool(payload.get("auto_number"))
             except Exception:
@@ -2747,11 +2848,15 @@ class Handler(BaseHTTPRequestHandler):
             if not ids:
                 self._send(400, json.dumps({"error": "no ids"}), "application/json")
                 return
-            dest = os.path.join(banklib.ROOT, "last-export.docx")
-            with LOCK:
-                n = banklib.export_docx(ids, dest, keep_source=keep_source, auto_number=auto_number)
-            with open(dest, "rb") as f:
-                data = f.read()
+            dest = os.path.join(banklib.DATA_DIR, "last-export.docx")
+            try:
+                with LOCK:
+                    n = banklib.export_docx(ids, dest, keep_source=keep_source, auto_number=auto_number)
+                    with open(dest, "rb") as f:
+                        data = f.read()
+            except RuntimeError as exc:
+                self._send(400, json.dumps({"error": str(exc)}, ensure_ascii=False), "application/json; charset=utf-8")
+                return
             self._send(
                 200, data,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
