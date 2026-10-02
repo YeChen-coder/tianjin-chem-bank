@@ -117,6 +117,8 @@ PAGE = r"""<!DOCTYPE html>
   .aibox { margin-top: 10px; border-top: 1px dashed #d5dde6; padding-top: 8px; }
   .aihead, .ailine, .airedit .row, .aibox .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .ainote, .aiprof { font-size: 12px; color: #556; margin: 4px 0; }
+  .aiprogress { margin: 8px 0; padding: 10px 12px; background: #eef5fc; border-left: 3px solid #0f4c81; color: #234; line-height: 1.6; }
+  .aiprogress[hidden] { display: none; }
   .aiver { position: relative; background: #f7fafc; border: 1px solid #e1e7ee; border-radius: 6px; padding: 8px 8px 36px; margin: 8px 0; }
   .aiver.pick-on { background: #e5f6ea; }
   .aiver.pick-off { background: #fdeeee; }
@@ -1663,7 +1665,31 @@ let aiPollTimer = null;
 let aiPollPaper = null;
 
 const AI_STOP_NOTICE = '该题多次尝试但结果存疑，请自行更改';
-const AI_RETRY_NOTICE = '有一版未通过，正在重新生成';
+const AI_RETRY_NOTICE = '新题检查未通过，正在重新改写并检查，请稍等。';
+function aiProgressText(job) {
+  if (!job) return null;
+  if (job.status === 'queued') return {
+    title: '正在等待开始',
+    detail: '这道题已经提交，轮到它时会自动开始处理。'
+  };
+  return ({
+    profile: {title: '正在读懂原题', detail: 'AI 正在看题干和图片，确认这道题考什么、哪些内容需要保留。'},
+    generate: {title: '正在改写题目', detail: 'AI 正在按你的要求写新题，并整理答案和解析。'},
+    judge: {title: '正在检查题目和答案', detail: '新题已经写好，AI 正在再检查一遍，确认题目、图片和答案是否对应。'}
+  })[job.phase] || {title: '正在处理这道题', detail: '处理完成后，结果会自动显示在这里。'};
+}
+function aiFriendlyError(message) {
+  const text = String(message || '');
+  if (/32 张|超过.*图片上限/.test(text)) return '这道题的图片太多，请先检查是否把几道题连在了一起，并拆开后重试。';
+  if (/图片|image/i.test(text)) return '这道题的图片缺失或无法读取，暂时不能改写。请检查图片，必要时从原 Word 文件重新导入这道题。';
+  if (/输出额度|output_limit|finish_reason.*length/.test(text)) return 'AI 这次没有写完完整题目，请稍后重新生成。';
+  if (/429|并发|限流|1302/.test(text)) return 'AI 服务现在比较忙，这次没有完成，请稍后重试。';
+  if (/超时|限时|心跳|timeout/i.test(text)) return '这次等待太久，仍没有拿到完整结果，请稍后重试。';
+  if (/密钥|权限|401|403|auth/i.test(text)) return '暂时无法使用 AI 服务，请联系配置这个程序的人检查设置。';
+  if (/配置|config/i.test(text)) return 'AI 服务还没有设置好，请联系配置这个程序的人检查设置。';
+  if (/JSON|正文|parse|empty/i.test(text)) return 'AI 这次返回的内容不完整，暂时不能作为新题使用，请重新生成。';
+  return '这次没有完成处理，请稍后重试；如果仍然失败，请联系配置这个程序的人帮忙查看。';
+}
 function aiStatusText(st) {
   if (st === 'QUEUED' || st === 'GENERATING') return '生成中';
   if (st === 'GENERATED' || st === 'JUDGING') return '审核中';
@@ -2095,25 +2121,32 @@ function aiUpsertBox(art, base) {
     const note = document.createElement('div');
     note.className = 'ainote';
     note.textContent = '「已校验」只表示自动检查通过，不是最终定稿。';
+    const progress = document.createElement('div');
+    progress.className = 'aiprogress';
+    progress.setAttribute('role', 'status');
+    progress.setAttribute('aria-live', 'polite');
+    progress.hidden = true;
     const prof = document.createElement('div');
     prof.className = 'aiprof';
     const vers = document.createElement('div');
     vers.className = 'aivers';
     box.appendChild(head);
+    box.appendChild(progress);
     box.appendChild(note);
     box.appendChild(prof);
     box.appendChild(vers);
     holder.appendChild(box);
   }
   const live = box.querySelector('.ailive');
+  const state = aiProgressText(base.active_job);
   if (live) {
-    const job = base.active_job;
-    if (job) {
-      live.textContent = job.status === 'queued' ? '等待处理' :
-        ({profile:'正在分析原题', generate:'正在改写题目', judge:'正在独立审核'}[job.phase] || '处理中');
-    } else {
-      live.textContent = '';
-    }
+    live.textContent = state ? state.title : '';
+  }
+  const progress = box.querySelector('.aiprogress');
+  if (progress) {
+    progress.hidden = !state;
+    const explanation = state ? state.detail + ' 一道新题通常要先读懂原题、再改写、最后检查。带图题有时需要一分钟或更久。页面会自动更新，无需重复点击。' : '';
+    if (progress.textContent !== explanation) progress.textContent = explanation;
   }
   const prof = box.querySelector('.aiprof');
   if (prof) {
@@ -2139,7 +2172,7 @@ function aiUpsertBox(art, base) {
     if (!n || !n.message) return;
     const line = document.createElement('div');
     line.className = n.stopped ? 'aistop' : 'ainote';
-    line.textContent = n.stopped ? AI_STOP_NOTICE : (n.message || AI_RETRY_NOTICE);
+    line.textContent = n.stopped ? AI_STOP_NOTICE : (n.error ? aiFriendlyError(n.message) : AI_RETRY_NOTICE);
     notes.appendChild(line);
   });
   const seen = {};
@@ -2229,7 +2262,7 @@ window.chemBankAiCompose = async function(detail) {
   const dup = jobs.filter(j => j.duplicate).length;
   if (msg) {
     if (!jobs.length) msg.textContent = '这套试卷上没有可以生成变式的题目';
-    else msg.textContent = '已开始 ' + fresh + ' 题' + (dup ? ('，另有 ' + dup + ' 题正在生成') : '');
+    else msg.textContent = '已提交 ' + fresh + ' 题' + (dup ? ('，另有 ' + dup + ' 题正在处理') : '') + '。每题会先读懂、再改写、最后检查；题目多时需要分批等待，具体进度见各题下方。';
   }
   if (jobs.length) aiStartPoll(paperId);
   aiRefresh(paperId);
