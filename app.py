@@ -2109,7 +2109,8 @@ function aiUpsertBox(art, base) {
   if (live) {
     const job = base.active_job;
     if (job) {
-      live.textContent = (job.phase === 'judge') ? '审核中' : '生成中';
+      live.textContent = job.status === 'queued' ? '等待处理' :
+        ({profile:'正在分析原题', generate:'正在改写题目', judge:'正在独立审核'}[job.phase] || '处理中');
     } else {
       live.textContent = '';
     }

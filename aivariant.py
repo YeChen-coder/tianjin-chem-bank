@@ -8,6 +8,8 @@ Environment (names only; values are read when the worker starts, never stored):
                      thinking.type only supports enabled. Temperature 1, top_p 0.95.
   GLM_PRO            default glm-5.3 (text flagship). Never send images to it.
   GLM_API_URL        default https://open.bigmodel.cn/api/paas/v4/chat/completions
+  GLM_REASONING_EFFORT default high (low / high / max on GLM-5.3).
+  GLM_MAX_TOKENS     default 8192; includes the model's reasoning budget.
   DEEPSEEK_API_KEY   fallback. Used once when GLM is unset or that call fails.
                      Do not write it to the DB, UI, or logs.
   DEEPSEEK_FLASH     default deepseek-flash
@@ -154,9 +156,13 @@ INTENSITY_TEXT = {
 
 
 class ModelError(Exception):
-    def __init__(self, kind):
+    def __init__(self, kind, message=None):
         self.kind = kind
-        super().__init__(kind)
+        messages = {"config":"AI 配置不完整", "auth":"API 密钥或模型权限不足",
+                    "http":"模型请求失败", "empty":"模型未返回正文",
+                    "parse":"模型未返回有效题目 JSON",
+                    "output_limit":"模型输出额度耗尽，未形成完整题目 JSON；请降低推理强度或增大 GLM_MAX_TOKENS"}
+        super().__init__(message or messages.get(kind, kind))
 
 
 def questions_search_hidden():
@@ -273,7 +279,11 @@ def parse_judge_status(payload):
 
 
 def _safe_text(exc):
-    s = str(exc)[:240]
+    s = str(exc)
+    for key in (_glm_key, _ds_key, _api_key):
+        if key:
+            s = s.replace(key, "[redacted]")
+    s = s[:240]
     return _KEY_RE.sub("[redacted]", s)
 
 
@@ -1082,6 +1092,10 @@ def _public_base(con, qid, on_paper):
                 "stopped": False,
                 "message": RETRY_NOTICE,
             })
+    for v in versions:
+        if v["status"] in ("GENERATION_ERROR", "JUDGE_ERROR"):
+            notices.append({"stopped": False, "message": _safe_text(v["error"] or "模型请求没有完成"),
+                            "error": True, "version_id": v["id"]})
     pub_versions = []
     for v in versions:
         if v["status"] in VERSION_NONTERMINAL:
@@ -1235,14 +1249,18 @@ def _has_image(row, segments):
 
 def _image_paths(segments):
     paths = []
-    for img in collect_imgs(segments):
+    images = collect_imgs(segments)
+    if len(images) > 32:
+        raise ModelError("image", "单题超过程序的 32 张图片上限，请核对是否存在粘连题并拆分")
+    for img in images:
         name = os.path.basename(img.get("src") or "")
         if not re.fullmatch(r"[0-9a-f]{64}\.(png|jpg|jpeg|gif|bmp|webp)", name):
-            continue
+            raise ModelError("image", "题目图片格式无法送入 AI，请先生成 PNG/JPEG 预览：" + name)
         path = os.path.join(banklib.MEDIA, name)
-        if os.path.isfile(path):
-            paths.append(path)
-    return paths[:8]
+        if not os.path.isfile(path):
+            raise ModelError("image", "题目图片文件缺失：" + name)
+        paths.append(path)
+    return paths
 
 
 def _data_url(path):
@@ -1334,20 +1352,22 @@ def _http_post(url, key, body, timeout):
                 "Accept": "application/json",
             },
         )
+        if conn.sock is not None:
+            conn.sock.settimeout(max(0.1, timeout - (time.monotonic() - started)))
         resp = conn.getresponse()
         status = resp.status
         if status != 200:
             try:
-                resp.read(4096)
+                error_data = json.loads(resp.read(4096).decode("utf-8"))
             except Exception:
-                pass
-            return status, None
+                error_data = None
+            return status, error_data
         buf = bytearray()
         first_byte = None
         while True:
             now = time.monotonic()
             if now - started >= timeout:
-                return 503, None
+                return 503, {"error": {"message": "模型请求超过 %s 秒限时" % timeout}}
             # Keep-alives alone are not progress. Content must show up within 60s
             # of the first body byte. A quiet non-streaming response may use the
             # full socket deadline (about 90s) before any byte arrives.
@@ -1356,10 +1376,14 @@ def _http_post(url, key, body, timeout):
                 and _only_keepalive(buf)
                 and now - first_byte >= _KEEPALIVE_LIMIT
             ):
-                return 503, None
-            if conn.sock is not None:
-                conn.sock.settimeout(max(1.0, timeout - (now - started)))
-            part = resp.read(8192)
+                return 503, {"error": {"message": "模型只返回心跳，没有有效结果"}}
+            sock = conn.sock or getattr(getattr(resp.fp, "raw", None), "_sock", None)
+            if sock is not None:
+                remaining = timeout - (now - started)
+                if first_byte is not None and _only_keepalive(buf):
+                    remaining = min(remaining, _KEEPALIVE_LIMIT - (now - first_byte))
+                sock.settimeout(max(0.1, remaining))
+            part = resp.read1(8192)
             if not part:
                 break
             if first_byte is None:
@@ -1376,8 +1400,10 @@ def _http_post(url, key, body, timeout):
         if payload is None:
             return 503, None
         return 200, payload
-    except (http.client.HTTPException, TimeoutError, socket.timeout, OSError, ValueError):
-        return 503, None
+    except (TimeoutError, socket.timeout):
+        return 503, {"error": {"message": "模型请求超时（%s 秒限时）" % timeout}}
+    except (http.client.HTTPException, OSError, ValueError) as exc:
+        return 503, {"error": {"message": "模型连接异常：" + type(exc).__name__}}
     finally:
         try:
             conn.close()
@@ -1396,6 +1422,8 @@ def _message_text(data):
     choices = data.get("choices") or []
     if not choices or not isinstance(choices[0], dict):
         raise ModelError("empty")
+    if choices[0].get("finish_reason") == "length":
+        raise ModelError("output_limit")
     msg = choices[0].get("message") or {}
     content = msg.get("content")
     if isinstance(content, list):
@@ -1415,8 +1443,9 @@ def _user_content(user_text, image_paths):
     urls = []
     for path in image_paths or []:
         url = _data_url(path)
-        if url:
-            urls.append(url)
+        if not url:
+            raise ModelError("image", "图片缺失、格式不支持或超过 8 MB，无法提交 AI：" + os.path.basename(path))
+        urls.append(url)
     if not urls:
         return user_text
     content = [{"type": "text", "text": user_text}]
@@ -1489,11 +1518,22 @@ def _glm_bodies(model, system, user_text, image_paths):
         ],
         "temperature": 1,
         "top_p": 0.95,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "stream": False,
         "thinking": thinking,
         "response_format": {"type": "json_object"},
     }
+    if model.lower().startswith(("glm-5.2", "glm-5.3")):
+        effort = (os.environ.get("GLM_REASONING_EFFORT") or "high").lower().strip()
+        if effort not in ("low", "high", "max"):
+            raise ModelError("config", "GLM_REASONING_EFFORT 只能是 low、high 或 max")
+        rich["reasoning_effort"] = effort
+    try:
+        rich["max_tokens"] = int(os.environ.get("GLM_MAX_TOKENS") or 8192)
+        if not 512 <= rich["max_tokens"] <= 32768:
+            raise ValueError()
+    except ValueError:
+        raise ModelError("config", "GLM_MAX_TOKENS 必须是 512 至 32768 的整数")
     plain = dict(rich)
     plain.pop("response_format", None)
     plain["thinking"] = dict(thinking)
@@ -1513,7 +1553,11 @@ def _glm_chat(model, system, user_text, image_paths=None):
         return _message_text(data)
     if status in (401, 403):
         raise ModelError("auth")
-    raise ModelError("http")
+    error = data.get("error", {}) if isinstance(data, dict) else {}
+    message = error.get("message") if isinstance(error, dict) else ""
+    code = error.get("code") if isinstance(error, dict) else ""
+    raise ModelError("http", "GLM 请求失败（HTTP %s%s）%s" %
+                     (status, "，代码 " + str(code) if code else "", "：" + _safe_text(message) if message else ""))
 
 
 def chat_complete(model, system, user_text, image_paths=None):
@@ -1568,20 +1612,29 @@ def complete_role(role, system, user_text, image_paths=None):
         raise ModelError("config")
     if role != "flash":
         image_paths = None
+    glm_error = None
     if _glm_key:
         model = _glm_flash if role == "flash" else _glm_pro
         try:
             text = _glm_chat(model, system, user_text, image_paths)
             parse_model_json(text)
             return text, model
-        except (ModelError, ValueError, json.JSONDecodeError):
+        except (ModelError, ValueError, json.JSONDecodeError) as exc:
+            if isinstance(exc, ModelError) and exc.kind in ("config", "image"):
+                raise
             if not _ds_key:
                 raise
+            glm_error = _safe_text(exc)
     if not _ds_key:
         raise ModelError("config")
     model = _ds_flash if role == "flash" else _ds_pro
-    text = _deepseek_chat(model, system, user_text, image_paths)
-    parse_model_json(text)
+    try:
+        text = _deepseek_chat(model, system, user_text, image_paths)
+        parse_model_json(text)
+    except (ModelError, ValueError, json.JSONDecodeError) as exc:
+        if glm_error:
+            raise ModelError("http", "GLM：" + glm_error + "；备用模型：" + _safe_text(exc)) from None
+        raise
     return text, model
 
 
@@ -1958,10 +2011,10 @@ def _process(con, job_id):
         )
         con.commit()
         profile, image = _ensure_profile(con, ver["session_id"], base, segments)
-    except ModelError:
+    except ModelError as exc:
         if _should_stop(con, job_id, ver["id"], epoch):
             return
-        _set_version(con, ver["id"], "GENERATION_ERROR", "生成没有完成")
+        _set_version(con, ver["id"], "GENERATION_ERROR", _safe_text(exc))
         _finish_job(con, job_id, "done")
         return
     except Exception as exc:
@@ -2001,10 +2054,10 @@ def _process(con, job_id):
         normalized = build_variant_segments(candidate, segments)
         if not normalized:
             raise ModelError("parse")
-    except ModelError:
+    except ModelError as exc:
         if _should_stop(con, job_id, ver["id"], epoch):
             return
-        _set_version(con, ver["id"], "GENERATION_ERROR", "生成没有完成")
+        _set_version(con, ver["id"], "GENERATION_ERROR", _safe_text(exc))
         _finish_job(con, job_id, "done")
         return
     except Exception as exc:
@@ -2096,10 +2149,10 @@ def _run_judge(con, job, ver, base, base_segments, profile=None, image=None, nor
         data["status"] = status
         if not isinstance(data.get("issues"), list):
             data["issues"] = []
-    except ModelError:
+    except ModelError as exc:
         if _should_stop(con, job["id"], ver["id"], epoch):
             return False
-        _set_version(con, ver["id"], "JUDGE_ERROR", "审核没有完成", judge_model=model)
+        _set_version(con, ver["id"], "JUDGE_ERROR", _safe_text(exc), judge_model=model)
         return True
     except Exception as exc:
         if _should_stop(con, job["id"], ver["id"], epoch):
