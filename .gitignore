@@ -29,3 +29,6 @@ verify_once.py
 
 # API keys for this computer only
 keys.local
+
+# local bot plans contain real question selections
+.bot-plans/

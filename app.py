@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import banklib
 import aivariant
 import question_analysis
+import bot_bridge
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("CHEM_PORT") or 8765)
@@ -2487,8 +2488,58 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _handle_bot(self, method, u):
+        try:
+            port = self.server.server_address[1]
+            host = urlparse('http://' + self.headers.get('Host', ''))
+            if host.hostname not in ('127.0.0.1', 'localhost') or host.port != port:
+                raise bot_bridge.BridgeError('组卷工具只接受本机题库地址', 403)
+            origin = self.headers.get('Origin')
+            if origin:
+                parsed = urlparse(origin)
+                if parsed.scheme != 'http' or parsed.hostname not in ('127.0.0.1', 'localhost') or parsed.port != port:
+                    raise bot_bridge.BridgeError('请从本机题库程序使用组卷工具', 403)
+            actions = {'/api/bot/search': bot_bridge.search,
+                       '/api/bot/questions': bot_bridge.read_questions,
+                       '/api/bot/papers': bot_bridge.create_paper}
+            if method == 'GET' and u.path == '/api/bot/info':
+                with LOCK:
+                    con = db()
+                    try:
+                        result = bot_bridge.info(con)
+                    finally:
+                        con.close()
+            elif method == 'POST' and u.path in actions:
+                if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
+                    raise bot_bridge.BridgeError('组卷工具需要 application/json 请求', 415)
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < length <= 131072:
+                        raise bot_bridge.BridgeError('请求内容为空或超过大小限制')
+                    payload = json.loads(self.rfile.read(length).decode('utf-8'))
+                except (ValueError, UnicodeError):
+                    raise bot_bridge.BridgeError('请求不是有效的 UTF-8 JSON')
+                with LOCK:
+                    con = db()
+                    try:
+                        result = actions[u.path](con, payload)
+                    finally:
+                        con.close()
+            else:
+                raise bot_bridge.BridgeError('组卷工具没有这个操作', 404)
+            self._send(200, json.dumps(result, ensure_ascii=False), 'application/json; charset=utf-8')
+        except bot_bridge.BridgeError as exc:
+            self.close_connection = True
+            self._send(exc.status, json.dumps({'error': str(exc)}, ensure_ascii=False), 'application/json; charset=utf-8')
+        except (ValueError, sqlite3.Error):
+            self.close_connection = True
+            self._send(400, json.dumps({'error': '无法读取题库，请确认程序使用的是已准备好的题库'}, ensure_ascii=False), 'application/json; charset=utf-8')
+
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path.startswith('/api/bot/'):
+            self._handle_bot('GET', u)
+            return
         if u.path in ("/", "/index.html"):
             page = PAGE
             if os.environ.get("CHEM_DISABLE_AI") == "1":
@@ -2766,6 +2817,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if u.path.startswith('/api/bot/'):
+            self._handle_bot('POST', u)
+            return
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
         if _handle_ai_post(self, u.path, raw):
