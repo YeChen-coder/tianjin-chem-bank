@@ -1068,6 +1068,9 @@ def delete_question(con, qid):
     con.execute("DELETE FROM question_majors WHERE question_id=?", (qid,))
     con.execute("DELETE FROM question_minors WHERE question_id=?", (qid,))
     con.execute("DELETE FROM question_metadata WHERE question_id=?", (qid,))
+    if con.execute("SELECT 1 FROM sqlite_master WHERE name='answer_jobs'").fetchone():
+        con.execute("UPDATE answer_jobs SET status='cancelled',phase='cancelled' WHERE question_id=? AND status IN ('queued','running')", (qid,))
+        con.execute("DELETE FROM answer_records WHERE question_id=?", (qid,))
     con.execute("DELETE FROM questions WHERE id=?", (qid,))
     con.commit()
     return True
@@ -2401,6 +2404,8 @@ def init_db():
     ensure_paper_schema(con)
     import aivariant
     aivariant.ensure_schema(con)
+    import aianswers
+    aianswers.ensure_schema(con)
     ensure_paper_type_order(con)
     con.commit()
     return con
@@ -3174,6 +3179,10 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True, keep_an
     def write_answer(row, metadata):
         text = (row['answer'] or '').strip()
         saved = metadata.get('answer_segments') or []
+        import aianswers
+        reviewed = aianswers.export_text(con, row['id'])
+        if reviewed is not None:
+            text, saved = reviewed, []
         # The current answer is authoritative; stale imported formatting must
         # not replace a later edit. Image-only answers also count as existing.
         saved_text = '\n'.join(item_plain(item) for item in saved).strip()

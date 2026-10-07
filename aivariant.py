@@ -1652,7 +1652,7 @@ def _validate_role_response(system, text):
     return data
 
 
-def complete_role(role, system, user_text, image_paths=None):
+def complete_role(role, system, user_text, image_paths=None, preferred_provider=None):
     """One question. GLM first when configured, then one DeepSeek call of the same role.
 
     Returns (text, model_id) for the call that actually returned parseable JSON.
@@ -1662,6 +1662,19 @@ def complete_role(role, system, user_text, image_paths=None):
         raise ModelError("config")
     if role != "flash":
         image_paths = None
+    ds_error = None
+    # Answer-only independent checking can use a different available provider.
+    # This preference is local to the call; never switch global keys in worker threads.
+    if preferred_provider == 'deepseek' and _ds_key:
+        model = _ds_flash if role == 'flash' else _ds_pro
+        try:
+            text = _deepseek_chat(model, system, user_text, image_paths)
+            _validate_role_response(system, text)
+            return text, model
+        except (ModelError, ValueError, json.JSONDecodeError) as exc:
+            if isinstance(exc, ModelError) and exc.kind in ('config', 'image'):
+                raise
+            ds_error = exc
     glm_error = None
     if _glm_key and not (_ds_key and _glm_paused()):
         model = _glm_flash if role == "flash" else _glm_pro
@@ -1676,6 +1689,10 @@ def complete_role(role, system, user_text, image_paths=None):
                 raise
             _pause_glm_if_quota(exc)
             glm_error = _safe_text(exc)
+    if ds_error is not None:
+        if glm_error:
+            raise ModelError('http', '独立核对服务：' + _safe_text(ds_error) + '；GLM：' + glm_error) from None
+        raise ds_error
     if not _ds_key:
         raise ModelError("config")
     model = _ds_flash if role == "flash" else _ds_pro

@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(__file__))
 import banklib
 import aivariant
+import aianswers
 import question_analysis
 import bot_bridge
 
@@ -91,6 +92,15 @@ PAGE = r"""<!DOCTYPE html>
   .src { font-size: 12px; color: #555; margin-top: 8px; }
   .src b { color: #333; }
   details { margin-top: 6px; font-size: 13px; color: #333; }
+  .answer-panel { border-top: 1px solid #ddd; padding-top: 8px; }
+  .answer-panel summary { cursor: pointer; font-weight: 600; }
+  .answer-part { border-left: 3px solid #79a883; padding: 8px 12px; margin: 10px 0; }
+  .answer-part.pending { border-color: #d9992e; background: #fff8e9; }
+  .answer-panel textarea { display: block; width: 100%; box-sizing: border-box; min-height: 72px; margin: 6px 0; font: inherit; line-height: 1.6; }
+  .answer-panel .answer-note { color: #626b73; margin: 6px 0; white-space: pre-wrap; }
+  .answer-panel .answer-error { color: #a33; }
+  .answer-candidate { white-space: pre-wrap; padding: 6px 0; border-bottom: 1px dashed #ddd; }
+  #answer-msg { font-size: 13px; color: #485865; }
   .pager { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
   label.chk, .chk { display: flex; gap: 8px; align-items: flex-start; }
   .empty { color: #777; padding: 24px; }
@@ -228,6 +238,8 @@ PAGE = r"""<!DOCTYPE html>
     <label><input type="checkbox" id="pagetext"/> 本页纯文字题</label>
     <button id="ai-stop-all" class="secondary" type="button">叫停所有当前AI生成</button>
     <button id="ai-compose" type="button" hidden>AI改写</button>
+    <button id="ai-answers" type="button" hidden title="只给当前试卷中没有答案的题作答，已有答案会跳过">AI批量补答案</button>
+    <span id="answer-msg" role="status"></span>
     <span id="ai-intensity-wrap" hidden>改动
       <select id="ai-intensity" title="变式改动程度">
         <option value="light">轻</option>
@@ -611,17 +623,7 @@ function renderQuestion(item) {
   holder.appendChild(categoryPanel);
   holder.appendChild(stem);
   holder.appendChild(src);
-  if (item.answer) {
-    const det = document.createElement('details');
-    const sum = document.createElement('summary');
-    sum.textContent = '答案 / 解析';
-    det.appendChild(sum);
-    const pre = document.createElement('div');
-    pre.style.whiteSpace = 'pre-wrap';
-    pre.textContent = item.answer;
-    det.appendChild(pre);
-    holder.appendChild(det);
-  }
+  mountAnswerPanel(holder, item);
   const pencil = document.createElement('button');
   pencil.type = 'button';
   pencil.className = 'pencil';
@@ -1285,6 +1287,8 @@ function syncAiCompose() {
   if (!btn) return;
   const on = !!(currentPaperId || (paperFilter && paperFilter.id));
   btn.hidden = !on;
+  const answers = document.getElementById('ai-answers');
+  if (answers) answers.hidden = !on;
   const wrap = document.getElementById('ai-intensity-wrap');
   if (wrap) wrap.hidden = !on;
 }
@@ -2235,6 +2239,7 @@ window.chemBankStopAi = function() {
   aiPollTimer = null;
 };
 window.chemBankMountAi = async function() {
+  answerRefresh().catch(() => {});
   try {
     const live = await aiRefresh(aiPaperId());
     if (live) aiStartPoll(aiPaperId());
@@ -2281,6 +2286,7 @@ document.getElementById('ai-stop-all').addEventListener('click', async () => {
       return;
     }
     if (msg) msg.textContent = '已叫停';
+    await answerRefresh();
     try {
       const live = await aiRefresh(aiPaperId());
       if (!live) window.chemBankStopAi();
@@ -2291,6 +2297,220 @@ document.getElementById('ai-stop-all').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+let answerPollTimer = null;
+let answerRefreshing = false;
+const answerStatusNames = {CONFIRMED: '三次作答一致，独立核对已通过', TEACHER: '教师已确认',
+  SUSPECT: '存疑 · 请老师确认', MISSING: '尚未填写', STALE: '题目已修改 · 请重新核对'};
+
+function mountAnswerPanel(holder, item) {
+  const panel = document.createElement('details');
+  panel.className = 'answer-panel';
+  panel.dataset.questionId = item.id;
+  const summary = document.createElement('summary');
+  const jobLine = document.createElement('div');
+  jobLine.className = 'answer-note';
+  jobLine.setAttribute('role', 'status');
+  const contents = document.createElement('div');
+  panel.append(summary, jobLine, contents);
+  holder.append(panel);
+  let state = item.answer_state || {question_id: item.id, answer: item.answer || '', parts: [], revision: ''};
+  let saveQueue = Promise.resolve();
+  let outstanding = 0;
+  let editors = [];
+  let retryButton = null;
+  function updateSummary() {
+    const pending = state.parts.filter(p => !['CONFIRMED', 'TEACHER'].includes(p.status)).length;
+    summary.textContent = '答案 / 解析 · ' + (pending ? pending + ' 个小问待确认' :
+      (state.answer || state.has_answer ? '已保存，可编辑' : '未填写，可编辑'));
+    const job = state.job;
+    jobLine.textContent = job ? job.message + (job.error ? '：' + aiFriendlyError(job.error).replace(/改写/g, '作答').replace(/完整题目/g, '完整答案').replace(/新题/g, '答案').replace(/重新生成/g, '重新作答') : '') : '';
+    if (job && ['queued', 'running'].includes(job.status)) panel.open = true;
+    if (retryButton) retryButton.disabled = !!(job && ['queued', 'running'].includes(job.status));
+  }
+  function queueSave(editor, confirm) {
+    clearTimeout(editor.timer);
+    outstanding++;
+    editor.note.textContent = confirm ? '正在保存并确认…' : '正在保存…';
+    saveQueue = saveQueue.then(async () => {
+      const sent = editor.input.value;
+      const payload = {revision: state.revision, answer: sent};
+      if (editor.partId) payload.part_id = editor.partId;
+      if (confirm) payload.confirm = true;
+      try {
+        const r = await fetch('/api/questions/' + item.id + '/answer', {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || '保存失败');
+        state = data;
+        editor.saved = sent;
+        editor.failed = false;
+        editor.note.className = 'answer-note';
+        editor.note.textContent = '已自动保存' + (confirm ? '，教师已确认' : '');
+        const part = state.parts.find(p => p.id === editor.partId);
+        if (part) {
+          editor.title.textContent = part.label + ' · ' + answerStatusNames[part.status];
+          editor.box.classList.toggle('pending', !['CONFIRMED', 'TEACHER'].includes(part.status));
+          if (editor.confirmButton) editor.confirmButton.hidden = ['CONFIRMED', 'TEACHER'].includes(part.status);
+          if (editor.reasonDiv) editor.reasonDiv.textContent = part.reason || '';
+          if (editor.explanationDiv) {
+            editor.explanationDiv.textContent = part.explanation ? '解析：' + part.explanation : '';
+            editor.explanationDiv.hidden = !part.explanation;
+          }
+        }
+        updateSummary();
+      } catch (e) {
+        editor.failed = true;
+        editor.note.className = 'answer-note answer-error';
+        editor.note.textContent = e.message + '；输入已保留，可复制后刷新重试';
+      } finally { outstanding--; }
+    });
+  }
+  function addEditor(part) {
+    const box = document.createElement('div');
+    box.className = 'answer-part' + (part && !['CONFIRMED', 'TEACHER'].includes(part.status) ? ' pending' : '');
+    const title = document.createElement('div');
+    title.textContent = part ? part.label + ' · ' + answerStatusNames[part.status] : '答案（修改后自动保存）';
+    box.append(title);
+    if (part && part.prompt) {
+      const prompt = document.createElement('div'); prompt.className = 'answer-note'; prompt.textContent = part.prompt; box.append(prompt);
+    }
+    const reason = document.createElement('div'); reason.className = 'answer-note'; reason.textContent = part && part.reason || ''; box.append(reason);
+    if (part && part.candidates && part.candidates.length) {
+      const alternatives = document.createElement('details');
+      alternatives.open = !['CONFIRMED', 'TEACHER'].includes(part.status);
+      const label = document.createElement('summary'); label.textContent = '查看几次作答及核对依据'; alternatives.append(label);
+      part.candidates.forEach(candidate => {
+        const text = document.createElement('div'); text.className = 'answer-candidate';
+        text.textContent = '第 ' + candidate.attempt + ' 次独立作答' +
+          '：' + (candidate.answer || '未能确定') + '\n依据：' + (candidate.reason || '未提供');
+        alternatives.append(text);
+        if (!['CONFIRMED', 'TEACHER'].includes(part.status)) {
+          const use = document.createElement('button'); use.type = 'button'; use.className = 'secondary';
+          use.textContent = '填入这一答案'; use.onclick = () => { input.value = candidate.answer || ''; input.dispatchEvent(new Event('input')); };
+          alternatives.append(use);
+        }
+      });
+      box.append(alternatives);
+    }
+    const input = document.createElement('textarea');
+    input.setAttribute('aria-label', part ? part.label + '的答案' : '这道题的答案');
+    input.value = part ? (part.draft !== undefined ? part.draft : part.answer || '') : state.answer;
+    input.placeholder = part && !['CONFIRMED', 'TEACHER'].includes(part.status) ? '可填写或修改；核对后点“确认这一小问”' : '在这里填写答案，修改后自动保存';
+    const note = document.createElement('div'); note.className = 'answer-note'; note.setAttribute('role', 'status');
+    const editor = {partId: part && part.id, input, note, title, box, reasonDiv: reason, saved: input.value, timer: null, failed: false};
+    input.oninput = () => {
+      clearTimeout(editor.timer); note.textContent = '尚未保存…';
+      editor.timer = setTimeout(() => queueSave(editor, false), 600);
+    };
+    input.onblur = () => { if (input.value !== editor.saved && !editor.failed) queueSave(editor, false); };
+    box.append(input, note);
+    if (part && part.explanation) {
+      const explanation = document.createElement('div'); explanation.className = 'answer-note'; explanation.textContent = '解析：' + part.explanation; box.append(explanation);
+      editor.explanationDiv = explanation;
+    }
+    if (part && !['CONFIRMED', 'TEACHER'].includes(part.status)) {
+      const confirmButton = document.createElement('button'); confirmButton.type = 'button'; confirmButton.textContent = '确认这一小问';
+      confirmButton.onclick = () => { if (!input.value.trim()) { note.textContent = '请先填写答案'; return; } queueSave(editor, true); };
+      editor.confirmButton = confirmButton; box.append(confirmButton);
+    }
+    editors.push(editor); contents.append(box);
+  }
+  function render() {
+    contents.textContent = ''; editors = [];
+    updateSummary();
+    if (state.parts.length) state.parts.forEach(addEditor);
+    else {
+      // Preserve and display image-only imported answers until the teacher edits them.
+      const images = [];
+      function walk(value) {
+        if (Array.isArray(value)) value.forEach(walk);
+        else if (value && typeof value === 'object') {
+          if (value.t === 'img' && value.src) images.push(value.src);
+          if (value.rows) walk(value.rows);
+        }
+      }
+      walk(item.metadata && item.metadata.answer_segments);
+      images.forEach(src => { const img = document.createElement('img'); img.src = src; img.alt = '原有答案图片'; contents.append(img); });
+      if (images.length) { const note = document.createElement('div'); note.className = 'answer-note'; note.textContent = '原答案含图片；如需改成文字答案，请在下方填写。'; contents.append(note); }
+      addEditor(null);
+    }
+    if (aiPaperId()) {
+      const pending = state.stale || state.parts.some(p => !['CONFIRMED', 'TEACHER'].includes(p.status));
+      if (pending || !state.has_answer) {
+        const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'secondary';
+        retryButton = retry;
+        retry.textContent = pending ? '重新核对待确认的答案' : 'AI给这道题补答案';
+        retry.disabled = !!(state.job && ['queued', 'running'].includes(state.job.status));
+        retry.onclick = async () => {
+          if (outstanding || editors.some(e => e.input.value !== e.saved || e.failed)) { jobLine.textContent = '请等输入保存完成，再重新核对'; return; }
+          retry.disabled = true;
+          try {
+            const r = await fetch('/api/questions/' + item.id + '/ai-answer', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paper_id: aiPaperId()})});
+            const data = await r.json(); if (!r.ok) throw new Error(data.error || '没有开始作答');
+            answerStartPoll(); await answerRefresh();
+          } catch (e) { jobLine.textContent = e.message; retry.disabled = false; }
+        };
+        contents.append(retry);
+      }
+    }
+  }
+  panel.answerController = {update(next) {
+    if (state.revision === next.revision) { state.job = next.job; updateSummary(); return; }
+    if (outstanding || editors.some(e => e.input.value !== e.saved || e.failed)) {
+      state.job = next.job; updateSummary(); return;
+    }
+    state = next; render();
+  }};
+  render();
+}
+
+function answerStartPoll() {
+  if (!answerPollTimer) answerPollTimer = setInterval(() => answerRefresh().catch(() => {}), 1800);
+}
+async function answerRefresh() {
+  if (answerRefreshing) return;
+  const panels = [...document.querySelectorAll('.answer-panel')];
+  const paper = aiPaperId();
+  if (!paper && !panels.length) return;
+  answerRefreshing = true;
+  try {
+    const url = paper ? '/api/papers/' + paper + '/answers' : '/api/answers?ids=' + panels.map(p => p.dataset.questionId).join(',');
+    const r = await fetch(url); if (!r.ok) return;
+    const data = await r.json();
+    const byId = new Map((data.items || []).map(s => [String(s.question_id), s]));
+    panels.forEach(p => { const s = byId.get(p.dataset.questionId); if (s && p.answerController) p.answerController.update(s); });
+    if (data.active) answerStartPoll();
+    else if (answerPollTimer) { clearInterval(answerPollTimer); answerPollTimer = null; }
+    if (paper) {
+      const active = (data.items || []).filter(s => s.job && ['queued', 'running'].includes(s.job.status)).length;
+      const pending = (data.items || []).filter(s => s.parts.some(p => !['CONFIRMED', 'TEACHER'].includes(p.status))).length;
+      const message = document.getElementById('answer-msg');
+      const finished = (data.items || []).filter(s => s.job && s.job.status === 'done').length;
+      const failed = (data.items || []).filter(s => s.job && ['error', 'stale'].includes(s.job.status)).length;
+      const cancelled = (data.items || []).filter(s => s.job && s.job.status === 'cancelled').length;
+      if (active) message.textContent = '还有 ' + active + ' 题正在作答或核对；每题会作答三次，再逐小问检查。';
+      else if (pending) message.textContent = pending + ' 题有小问待老师确认，其他通过的答案已保存。';
+      else if (failed) message.textContent = failed + ' 题未完成，请查看各题下方说明；已保存的答案保留。';
+      else if (cancelled) message.textContent = '补答案已叫停；已保存的答案保留。';
+      else if (finished) message.textContent = '补答案已完成，通过核对的答案已自动保存到题库。';
+    }
+  } finally { answerRefreshing = false; }
+}
+document.getElementById('ai-answers').onclick = async () => {
+  const paperId = aiPaperId(); if (!paperId) return;
+  const btn = document.getElementById('ai-answers'), message = document.getElementById('answer-msg');
+  btn.disabled = true;
+  try {
+    if (!paperFilter || paperFilter.id !== paperId) await openPaper(paperId, {view: true});
+    const r = await fetch('/api/papers/' + paperId + '/ai-answers', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    const data = await r.json(); if (!r.ok) throw new Error(data.error || '没有开始作答');
+    message.textContent = '已安排 ' + data.jobs.length + ' 题，跳过 ' + data.skipped + ' 题已有答案或待确认结果。答案会自动保存到题库。';
+    if (data.jobs.length) answerStartPoll();
+    await answerRefresh();
+  } catch (e) { message.textContent = e.message; }
+  finally { btn.disabled = false; }
+};
 
 paperReady = true;
 const savedPaper = new URL(location.href).searchParams.get('paper');
@@ -2318,6 +2538,8 @@ def _ai_send(handler, code, payload):
 
 
 def _handle_ai_post(handler, path, raw):
+    if _handle_answers_post(handler, path, raw):
+        return True
     if os.environ.get("CHEM_DISABLE_AI") == "1" and (
         path.endswith("/ai-variants") or path.startswith("/api/ai-versions/")
         or path.endswith("/ai-generate") or path.endswith("/ai-regenerate")
@@ -2330,6 +2552,7 @@ def _handle_ai_post(handler, path, raw):
             try:
                 aivariant.ensure_schema(con)
                 result = aivariant.stop_all(con)
+                result['stopped'] += aianswers.stop_all(con)
             finally:
                 con.close()
         _ai_send(handler, 200, result)
@@ -2470,6 +2693,35 @@ def db():
     return con
 
 
+def _handle_answers_post(handler, path, raw):
+    batch = re.fullmatch(r'/api/papers/(\d+)/ai-answers', path)
+    single = re.fullmatch(r'/api/questions/(\d+)/(ai-answer|answer)', path)
+    if not batch and not single:
+        return False
+    data = _ai_body(raw)
+    if data is None:
+        _ai_send(handler, 400, {'error': '请求格式不对'})
+        return True
+    with LOCK:
+        con = db()
+        try:
+            if batch:
+                result, error = aianswers.enqueue(con, int(batch[1]))
+            elif single[2] == 'answer':
+                result, error = aianswers.edit_answer(con, int(single[1]), data)
+            else:
+                paper_id = data.get('paper_id')
+                if not isinstance(paper_id, int) or isinstance(paper_id, bool) or paper_id <= 0:
+                    result, error = None, '请先打开这道题所在的试卷'
+                else:
+                    result, error = aianswers.enqueue(con, paper_id, int(single[1]), retry=True)
+        finally:
+            con.close()
+    code = 200 if not error else (409 if '别处更新' in error else 400)
+    _ai_send(handler, code, {'error': error} if error else result)
+    return True
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -2538,6 +2790,35 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        answer_paper = re.fullmatch(r'/api/papers/(\d+)/answers', u.path)
+        answer_one = re.fullmatch(r'/api/questions/(\d+)/answer', u.path)
+        if answer_paper or answer_one or u.path == '/api/answers':
+            with LOCK:
+                con = db()
+                try:
+                    if answer_paper:
+                        paper = banklib.get_paper(con, int(answer_paper[1]))
+                        ids = paper['ids'] if paper else []
+                        missing = not paper
+                    elif answer_one:
+                        ids, missing = [int(answer_one[1])], False
+                    else:
+                        try:
+                            ids = list(dict.fromkeys(int(q) for q in parse_qs(u.query).get('ids', [''])[0].split(',') if q))[:200]
+                        except ValueError:
+                            ids = []
+                        missing = False
+                    states = [s for qid in ids if (s := aianswers.state(con, qid)) is not None]
+                    missing |= bool(answer_one and not states)
+                finally:
+                    con.close()
+            if missing:
+                _ai_send(self, 404, {'error': '试卷或题目不存在'})
+            elif answer_one:
+                _ai_send(self, 200, states[0])
+            else:
+                _ai_send(self, 200, {'items': states, 'active': any(s['job'] and s['job']['status'] in ('queued', 'running') for s in states)})
+            return
         if u.path.startswith('/api/bot/'):
             self._handle_bot('GET', u)
             return
@@ -2703,6 +2984,7 @@ class Handler(BaseHTTPRequestHandler):
                         "qnum": row["qnum"],
                         "body": row["body"],
                         "answer": row["answer"],
+                        "answer_state": aianswers.state(con, row["id"]),
                         "segments": json.loads(row["segments"] or "[]"),
                         "major": row["major"],
                         "minor": row["minor"],
@@ -2796,10 +3078,12 @@ class Handler(BaseHTTPRequestHandler):
                 source_details = banklib.source_details(con, qid)
                 sources = [source["label"] for source in source_details]
                 metadata = banklib.question_metadata(con, row)
+                answer_state = aianswers.state(con, qid)
                 con.close()
             payload = {
                 "id": row["id"], "body": row["body"], "answer": row["answer"],
                 "metadata": metadata,
+                "answer_state": answer_state,
                 "segments": json.loads(row["segments"] or "[]"),
                 "major": row["major"], "minor": row["minor"],
                 "qtype": row["qtype"] if "qtype" in row.keys() else "",
@@ -3143,6 +3427,7 @@ def serve():
     con = banklib.init_db()
     con.close()
     aivariant.start_worker()
+    aianswers.start_worker()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     print("listening on http://%s:%d" % (HOST, PORT), flush=True)
     httpd.serve_forever()
