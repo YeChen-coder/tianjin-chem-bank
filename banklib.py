@@ -47,7 +47,7 @@ SKIP_LINE = re.compile(
     r"^(注意事项|可能用到的相对原子质量|考生注意|答卷前|祝你考试顺利|姓名|考生号)"
 )
 REJECT_BITS = (
-    "每题选出", "本卷共", "本大题", "可能用到", "答题卡", "答题时",
+    "每题选出", "本卷共", "本大题", "答题卡", "答题时",
     "如需改动", "本试卷", "考试结束", "考生须", "用2B", "用２Ｂ",
     "满分100", "满分１００",
 )
@@ -2201,8 +2201,6 @@ def is_exam_notice(text):
 def is_reject(rest):
     r = rest.strip()
     if is_exam_notice(r):
-        return True
-    if "相对原子质量" in r[:24]:
         return True
     for b in REJECT_BITS:
         if r.startswith(b) or b in r[:18]:

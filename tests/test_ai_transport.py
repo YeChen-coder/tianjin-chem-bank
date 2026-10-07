@@ -1,4 +1,5 @@
 import json
+import copy
 from pathlib import Path
 import sys
 
@@ -153,6 +154,68 @@ def test_both_invalid_answer_plans_fail_without_inventing_parts(monkeypatch):
     monkeypatch.setattr(a, '_deepseek_chat', lambda *args: '{"parts":[]}')
     with pytest.raises(a.ModelError, match='AI 没有完整列出作答位置'):
         aa._call(aa.PLAN, {'body': 'original'}, [], 'flash')
+
+
+def answer_step_fixture(stage):
+    part = {'id': 'p1', 'answer': 'H2O', 'reason': 'checked evidence',
+            'conditions_sufficient': True, 'image_clear': True}
+    if stage == 'judge':
+        part = {'id': 'p1', 'answer': 'H2O', 'explanation': 'checked evidence',
+                'reason': 'verified', 'equivalent': True, 'verified': True,
+                'candidate_checks': [{'attempt': n, 'correct': True} for n in (1, 2, 3)]}
+    return {'coverage_complete': True, 'missing_parts': [], 'parts': [part]}
+
+
+@pytest.mark.parametrize('stage,malformation', [
+    ('solve', 'wrong-id'), ('solve', 'coverage-string'), ('solve', 'judgment-string'),
+    ('judge', 'wrong-id'), ('judge', 'missing-check'), ('judge', 'duplicate-check'),
+])
+@pytest.mark.parametrize('independent', [False, True])
+def test_new_answer_steps_try_backup_for_invalid_schema(monkeypatch, stage, malformation, independent):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    monkeypatch.setattr(a, '_glm_key', 'fixture-glm')
+    monkeypatch.setattr(a, '_ds_key', 'fixture-ds')
+    valid = answer_step_fixture(stage)
+    invalid = copy.deepcopy(valid)
+    if malformation == 'wrong-id': invalid['parts'][0]['id'] = 'unexpected-id'
+    elif malformation == 'coverage-string': invalid['coverage_complete'] = 'true'
+    elif malformation == 'judgment-string': invalid['parts'][0]['image_clear'] = 'true'
+    elif malformation == 'missing-check': invalid['parts'][0]['candidate_checks'].pop()
+    elif malformation == 'duplicate-check': invalid['parts'][0]['candidate_checks'][2]['attempt'] = 2
+    calls = []
+    def response(provider):
+        def complete(model, system, user, images):
+            calls.append((provider, json.loads(user), images))
+            return json.dumps(invalid if len(calls) == 1 else valid)
+        return complete
+    monkeypatch.setattr(a, '_glm_chat', response('glm'))
+    monkeypatch.setattr(a, '_deepseek_chat', response('ds'))
+    request = {'body': 'new question', 'parts': [{'id': 'p1'}]}
+    if stage == 'judge': request['solutions'] = [{'attempt': n} for n in (1, 2, 3)]
+    value, _ = aa._call(aa.SOLVE if stage == 'solve' else aa.JUDGE, request, ['new-diagram.png'], 'flash', independent)
+    assert value == valid
+    assert [c[0] for c in calls] == (['ds', 'glm'] if independent else ['glm', 'ds'])
+    assert all(c[1] == request and c[2] == ['new-diagram.png'] for c in calls)
+
+
+@pytest.mark.parametrize('stage', ['solve', 'judge'])
+def test_valid_uncertainty_does_not_retry_until_a_model_passes(monkeypatch, stage):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    monkeypatch.setattr(a, '_glm_key', 'fixture-glm')
+    monkeypatch.setattr(a, '_ds_key', 'fixture-ds')
+    value = answer_step_fixture(stage)
+    if stage == 'solve':
+        value['parts'][0].update(conditions_sufficient=False, image_clear=False, answer='cannot determine')
+    else:
+        value['parts'][0].update(equivalent=False, verified=False)
+        value['parts'][0]['candidate_checks'][1]['correct'] = False
+    monkeypatch.setattr(a, '_glm_chat', lambda *args: json.dumps(value))
+    def unwanted_backup(*args): pytest.fail('A valid doubt must not be retried into approval')
+    monkeypatch.setattr(a, '_deepseek_chat', unwanted_backup)
+    request = {'parts': [{'id': 'p1'}]}
+    if stage == 'judge': request['solutions'] = [{'attempt': n} for n in (1, 2, 3)]
+    response, model = aa._call(aa.SOLVE if stage == 'solve' else aa.JUDGE, request, [], 'flash')
+    assert response == value and model == a._glm_flash
 
 
 def test_glm_quota_fallback_cooldown_and_recovery(monkeypatch):

@@ -75,6 +75,20 @@ def test_mass_reference_attached_to_a_real_question_is_preserved():
     assert not b.is_exam_notice('已知相对原子质量H 1 O 16，求水的相对分子质量。')
 
 
+@pytest.mark.parametrize('number', [4, 57, 208])
+@pytest.mark.parametrize('stem', [
+    '已知相对原子质量H=1，O=16，计算水的相对分子质量。',
+    '某元素的相对原子质量为24，写出该元素的符号。',
+    '相对原子质量与原子实际质量有什么区别？',
+    '可能用到的相对原子质量：H 1 O 16，计算水的相对分子质量。',
+])
+def test_new_mass_questions_survive_actual_docx_import(tmp_path, number, stem):
+    qs = b.questions_from_docx(document(tmp_path, p(str(number) + '．' + stem)))
+    assert len(qs) == 1
+    assert qs[0]['qnum'] == str(number)
+    assert qs[0]['body'] == stem
+
+
 def test_subquestions_decimal_and_section(tmp_path):
     qs = b.questions_from_docx(document(tmp_path, p('三、简答题（本大题共3题）') + p('16．请回答下列问题。\n（1）为什么？\n（2）如何验证？\n1.5g 是样品质量。') + p('17．请说明空气污染的主要原因。')))
     assert [q['qnum'] for q in qs] == ['16', '17']

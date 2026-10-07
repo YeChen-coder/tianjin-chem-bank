@@ -432,6 +432,38 @@ def _missing(value):
     return missing, (not complete and not missing)
 
 
+def _solution_parts(value, expected):
+    parts = _parts(value, expected)
+    missing, unclear = _missing(value)
+    for part in parts:
+        if not isinstance(part.get('answer'), str) or len(part['answer']) > 20000 or not isinstance(part.get('reason'), str) or len(part['reason']) > 12000:
+            raise ValueError('AI 没有返回可检查的完整答案')
+        _bool(part, 'conditions_sufficient')
+        _bool(part, 'image_clear')
+    return parts, missing, unclear
+
+
+def _judgement_parts(value, expected, attempts):
+    parts = _parts(value, expected)
+    missing, unclear = _missing(value)
+    for part in parts:
+        _bool(part, 'equivalent')
+        _bool(part, 'verified')
+        if not isinstance(part.get('reason'), str) or not part['reason'].strip() or len(part['reason']) > 12000:
+            raise ValueError('AI 没有给出核对依据')
+        checks = part.get('candidate_checks')
+        if not isinstance(checks, list) or len(checks) != len(attempts):
+            raise ValueError('AI 没有逐次核对答案和解析')
+        if any(not isinstance(c, dict) or not isinstance(c.get('attempt'), int) or isinstance(c['attempt'], bool) or not isinstance(c.get('correct'), bool) for c in checks):
+            raise ValueError('AI 逐次核对结果格式不正确')
+        if sorted(c['attempt'] for c in checks) != sorted(attempts):
+            raise ValueError('AI 逐次核对编号不完整')
+        for key in ('answer', 'explanation'):
+            if not isinstance(part.get(key), str) or len(part[key]) > 20000:
+                raise ValueError('AI 没有返回经过核对的答案和解析')
+    return parts, missing, unclear
+
+
 def _refine_plan(parts, qtype, body=''):
     blank_pattern = r'[_＿](?:[ \u2000-\u200b]*[_＿]){1,}'
     blanks = list(re.finditer(blank_pattern, body))
@@ -574,6 +606,13 @@ def _equation_issue(text):
 def _call(system, data, images, role, independent=False):
     preferred = 'deepseek' if independent and ai._glm_key and ai._ds_key else None
     options = {'response_validator': _plan_parts} if system == PLAN else {}
+    if system == SOLVE:
+        ids = [p['id'] for p in data['parts']]
+        options['response_validator'] = lambda value: _solution_parts(value, ids)
+    elif system == JUDGE:
+        ids = [p['id'] for p in data['parts']]
+        attempts = [s['attempt'] for s in data['solutions']]
+        options['response_validator'] = lambda value: _judgement_parts(value, ids, attempts)
     if preferred:
         raw, model = ai.complete_role(role, system, _json(data), images, preferred_provider=preferred, **options)
     else:
@@ -610,13 +649,7 @@ def evaluate(snapshot, progress):
         try:
             solver_role = 'pro' if number == 3 and not images else role
             value, solver_model = _call(SOLVE, request, images, solver_role, independent=(number == 2))
-            parts = _parts(value, ids)
-            missing, unclear = _missing(value)
-            for part in parts:
-                if not isinstance(part.get('answer'), str) or len(part['answer']) > 20000 or not isinstance(part.get('reason'), str) or len(part['reason']) > 12000:
-                    raise ValueError('AI 没有返回可检查的完整答案')
-                _bool(part, 'conditions_sufficient')
-                _bool(part, 'image_clear')
+            parts, missing, unclear = _solution_parts(value, ids)
             solutions.append({'attempt': number, 'model': solver_model, 'parts': parts,
                               'coverage_complete': value['coverage_complete'], 'missing_parts': missing})
             missing_parts.extend(missing)
@@ -630,26 +663,9 @@ def evaluate(snapshot, progress):
             # The judge gets the actual image again, not a previous model's description.
             judge_role = 'pro' if not images else role
             judgement, judge_model = _call(JUDGE, dict(request, solutions=solutions), images, judge_role, independent=True)
-            _parts(judgement, ids)
-            missing, unclear = _missing(judgement)
+            _, missing, unclear = _judgement_parts(judgement, ids, [s['attempt'] for s in solutions])
             missing_parts.extend(missing)
             unknown_coverage |= unclear
-            for part in judgement['parts']:
-                _bool(part, 'equivalent')
-                _bool(part, 'verified')
-                if not isinstance(part.get('reason'), str) or not part['reason'].strip() or len(part['reason']) > 12000:
-                    raise ValueError('AI 没有给出核对依据')
-                checks = part.get('candidate_checks')
-                attempts = [s['attempt'] for s in solutions]
-                if not isinstance(checks, list) or len(checks) != len(attempts):
-                    raise ValueError('AI 没有逐次核对答案和解析')
-                if any(not isinstance(c, dict) or not isinstance(c.get('attempt'), int) or isinstance(c['attempt'], bool) or not isinstance(c.get('correct'), bool) for c in checks):
-                    raise ValueError('AI 逐次核对结果格式不正确')
-                if sorted(c['attempt'] for c in checks) != sorted(attempts):
-                    raise ValueError('AI 逐次核对编号不完整')
-                for key in ('answer', 'explanation'):
-                    if not isinstance(part.get(key), str) or len(part[key]) > 20000:
-                        raise ValueError('AI 没有返回经过核对的答案和解析')
         except (ai.ModelError, ValueError, TypeError, KeyError) as exc:
             judgement = {}
             judge_error = ai._safe_text(exc)
@@ -750,8 +766,13 @@ def run_job(con, job_id):
     if not job or job['status'] != 'running':
         return
     snapshot = json.loads(job['snapshot'])
+    last_phase = 'preflight'
+    def progress(phase):
+        nonlocal last_phase
+        last_phase = phase
+        _phase(con, job_id, phase)
     try:
-        result = evaluate(snapshot, lambda phase: _phase(con, job_id, phase))
+        result = evaluate(snapshot, progress)
         con.execute('BEGIN IMMEDIATE')
         try:
             active = con.execute('SELECT status FROM answer_jobs WHERE id=?', (job_id,)).fetchone()
@@ -771,7 +792,10 @@ def run_job(con, job_id):
         pass
     except Exception as exc:
         con.rollback()
-        con.execute("UPDATE answer_jobs SET status='error',phase='error',error=?,finished_at=? WHERE id=? AND status='running'", (ai._safe_text(exc), _now(), job_id))
+        error = ai._safe_text(exc)
+        diagnostic = {'prompt_version': PROMPT_VERSION, 'failure_phase': last_phase,
+                      'error': error, 'created_at': _now()}
+        con.execute("UPDATE answer_jobs SET status='error',phase='error',error=?,result=?,finished_at=? WHERE id=? AND status='running'", (error, _json(diagnostic), _now(), job_id))
         con.commit()
 
 

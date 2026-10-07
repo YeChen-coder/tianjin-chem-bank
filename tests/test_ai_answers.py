@@ -763,3 +763,19 @@ def test_notice_record_fails_before_spending_on_models(bank, monkeypatch):
     assert state['job']['status'] == 'error'
     assert '试卷说明' in state['job']['error']
     assert not state['has_answer']
+
+
+def test_failed_new_question_keeps_redacted_stage_for_future_diagnosis(bank, monkeypatch):
+    con, pid = bank
+    secret = 'private-fixture-provider-key'
+    monkeypatch.setattr(ai, '_glm_key', secret)
+    def fail(*args, **options):
+        raise ai.ModelError('http', 'upstream failed: ' + secret)
+    monkeypatch.setattr(ai, 'complete_role', fail)
+    jid, state = run_first(con, pid)
+    raw = con.execute('SELECT result,error FROM answer_jobs WHERE id=?', (jid,)).fetchone()
+    diagnostic = json.loads(raw['result'])
+    assert diagnostic['failure_phase'] == 'plan'
+    assert secret not in raw['result'] + raw['error']
+    assert set(diagnostic) == {'prompt_version', 'failure_phase', 'error', 'created_at'}
+    assert not state['has_answer']
