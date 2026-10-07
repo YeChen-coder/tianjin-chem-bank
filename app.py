@@ -122,7 +122,9 @@ PAGE = r"""<!DOCTYPE html>
   .papers h2 { font-size: 15px; margin: 8px 0 6px; font-weight: 600; }
   .paperlist { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .paperlist .empty { padding: 0; }
-  button.paper.on { outline: 2px solid #f0c14a; }
+  button.paper.on { background: #138536; color: #fff; outline: 2px solid #0c6528; font-weight: 600; }
+  button#newpaper.paper-exit-active { background: #e00000; color: #fff; font-weight: 700; }
+  button#newpaper.paper-exit-active:hover { background: #c50000; }
   #paperhint { font-size: 13px; color: #223; }
   .paperview { margin: 8px 20px 0; padding: 8px 10px; background: #fff8e6; border: 1px solid #f0c14a; border-radius: 6px; font-size: 14px; color: #223; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .paperview[hidden] { display: none !important; }
@@ -262,6 +264,7 @@ let tree = {};
 let offset = 0;
 const limit = 20;
 let total = 0;
+let questionLoadRequest = 0;
 
 function esc(s) {
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1159,6 +1162,7 @@ function renderQuestion(item) {
 }
 
 async function load() {
+  const request = ++questionLoadRequest;
   const u = new URL('/api/questions', location.origin);
   if (paperFilter) {
     offset = 0;
@@ -1178,6 +1182,7 @@ async function load() {
   }
   const r = await fetch(u);
   const data = await r.json();
+  if (request !== questionLoadRequest) return;
   total = data.total || 0;
   list.innerHTML = '';
   if (!data.items || !data.items.length) {
@@ -1279,7 +1284,7 @@ document.getElementById('file').onchange = async (e) => {
 };
 let currentPaperId = null;
 let paperFilter = null;
-let paperClickTimer = null;
+let paperOpenRequest = 0;
 let openPaperIds = [];
 let paperReady = false;
 
@@ -1318,6 +1323,7 @@ function setPaperViewLine() {
   const el = document.getElementById('paperview');
   el.textContent = '';
   syncAiCompose();
+  syncPaperControls();
   if (!paperFilter) {
     el.hidden = true;
     rememberPaper();
@@ -1330,13 +1336,8 @@ function setPaperViewLine() {
   const back = document.createElement('button');
   back.type = 'button';
   back.className = 'secondary';
-  back.textContent = '返回全部';
-  back.addEventListener('click', () => {
-    paperFilter = null;
-    offset = 0;
-    setPaperViewLine();
-    load();
-  });
+  back.textContent = '返回题库';
+  back.addEventListener('click', exitPaper);
   el.appendChild(span);
   el.appendChild(back);
   rememberPaper();
@@ -1351,6 +1352,18 @@ function setPaperHint() {
     el.textContent = '未打开试卷，点从0组卷会新建一份';
   }
   syncAiCompose();
+  syncPaperControls();
+}
+
+function syncPaperControls() {
+  const active = !!currentPaperId;
+  document.getElementById('newpaper').classList.toggle('paper-exit-active', active);
+  document.querySelectorAll('#paperlist button.paper').forEach(button => {
+    const selected = active && button.dataset.paperId === String(currentPaperId);
+    button.classList.toggle('on', selected);
+    if (selected) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+  });
 }
 
 async function loadPapers() {
@@ -1369,30 +1382,11 @@ async function loadPapers() {
   papers.forEach(p => {
     const b = document.createElement('button');
     b.type = 'button';
+    b.dataset.paperId = String(p.id);
     b.className = 'secondary paper' + (p.id === currentPaperId ? ' on' : '');
     b.textContent = (p.name || '未命名试卷') + '（' + (p.count || 0) + '题）';
-    b.title = '单击打开继续编辑；双击只看这套题目，可批量补答案';
-    b.addEventListener('click', () => {
-      if (paperClickTimer) {
-        clearTimeout(paperClickTimer);
-        paperClickTimer = null;
-        return;
-      }
-      paperClickTimer = setTimeout(() => {
-        paperClickTimer = null;
-        paperFilter = null;
-        setPaperViewLine();
-        openPaper(p.id);
-      }, 280);
-    });
-    b.addEventListener('dblclick', (ev) => {
-      ev.preventDefault();
-      if (paperClickTimer) {
-        clearTimeout(paperClickTimer);
-        paperClickTimer = null;
-      }
-      openPaper(p.id, {view: true});
-    });
+    b.title = '单击进入这套试卷';
+    b.addEventListener('click', () => openPaper(p.id));
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'secondary';
@@ -1419,11 +1413,15 @@ async function loadPapers() {
     box.appendChild(b);
     box.appendChild(del);
   });
+  syncPaperControls();
 }
 
-async function openPaper(id, opts) {
+async function openPaper(id) {
+  const request = ++paperOpenRequest;
+  if (currentPaperId === Number(id) && paperFilter && paperFilter.id === Number(id)) return;
   const r = await fetch('/api/papers/' + id);
   const data = await r.json().catch(() => ({}));
+  if (request !== paperOpenRequest) return;
   if (!r.ok) { alert(data.error || '打开失败'); return; }
   currentPaperId = data.id;
   openPaperIds = (data.ids || []).slice();
@@ -1431,14 +1429,12 @@ async function openPaper(id, opts) {
   picked.clear();
   (data.ids || []).forEach(qid => picked.add(qid));
   updatePicked();
-  if (opts && opts.view) {
-    paperFilter = {
-      id: data.id,
-      name: data.name || '未命名试卷',
-      ids: (data.ids || []).slice()
-    };
-    offset = 0;
-  }
+  paperFilter = {
+    id: data.id,
+    name: data.name || '未命名试卷',
+    ids: (data.ids || []).slice()
+  };
+  offset = 0;
   setPaperHint();
   setPaperViewLine();
   await load();
@@ -1524,7 +1520,8 @@ document.getElementById('makepaper').onclick = async () => {
   loadPapers();
 };
 
-document.getElementById('newpaper').onclick = () => {
+function exitPaper() {
+  ++paperOpenRequest;
   currentPaperId = null;
   openPaperIds = [];
   document.getElementById('papername').value = '';
@@ -1534,7 +1531,8 @@ document.getElementById('newpaper').onclick = () => {
   setPaperViewLine();
   loadPapers();
   if (wasView) { offset = 0; load(); }
-};
+}
+document.getElementById('newpaper').onclick = exitPaper;
 
 document.getElementById('exportpaper').onclick = async () => {
   if (!currentPaperId) { alert('请先打开一套试卷'); return; }
@@ -2258,7 +2256,7 @@ window.chemBankAiCompose = async function(detail) {
   const sel = document.getElementById('ai-intensity');
   const intensity = sel ? sel.value : 'medium';
   if (!paperFilter || paperFilter.id !== paperId) {
-    await openPaper(paperId, {view: true});
+    await openPaper(paperId);
   }
   const r = await fetch('/api/papers/' + paperId + '/ai-variants', {
     method: 'POST',
@@ -2523,7 +2521,7 @@ document.getElementById('ai-answers').onclick = async () => {
 
 paperReady = true;
 const savedPaper = new URL(location.href).searchParams.get('paper');
-if (savedPaper) openPaper(savedPaper, {view: new URL(location.href).searchParams.get('view') === '1'});
+if (savedPaper) openPaper(savedPaper);
 else loadTree().then(load);
 </script>
 </body>
