@@ -1647,7 +1647,7 @@ def _validate_role_response(system, text):
     data = parse_model_json(text)
     if system == SYSTEM_GENERATOR:
         answer = data.get('answer')
-        if not isinstance(answer, str) or not answer.strip() or answer.strip() in ('略', '待补充', '暂无答案', 'N/A', '-'):
+        if not isinstance(answer, str) or not banklib.answer_text_content(answer) or answer.strip() in ('略', '待补充', '暂无答案', 'N/A', '-'):
             raise ModelError('answer')
     return data
 

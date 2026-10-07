@@ -2227,6 +2227,68 @@ def item_nonempty(item):
     return nonempty(item)
 
 
+_ANSWER_LABEL = r'(?:参考答案|答案|解答|解析|详解|分析|答)'
+_ANSWER_HEADING = re.compile(
+    r'^\s*(?:(?:【\s*' + _ANSWER_LABEL + r'\s*】|\[\s*' + _ANSWER_LABEL +
+    r'\s*\])\s*[:：]?|' + _ANSWER_LABEL + r'(?:\s*[:：]|\s*(?=\n|$)))'
+)
+
+
+def answer_text_content(text):
+    """Remove empty leading answer headings without rewriting stored source data."""
+    text = re.sub(r'[\u200b-\u200f\ufeff]', '', text or '').strip()
+    while (heading := _ANSWER_HEADING.match(text)) is not None:
+        text = text[heading.end():].strip()
+    return text
+
+
+def answer_has_content(text, segments=None):
+    """A heading/empty table is not an answer; real text, images and formulas are."""
+    plain = answer_text_content(text)
+    if plain and not segments:
+        return True
+    blocks = []
+    has_media = False
+    def walk(value):
+        nonlocal has_media
+        if isinstance(value, list):
+            if all(isinstance(p, dict) and p.get('t') in ('text', 'img') for p in value):
+                # Join runs before checking so a split 【答 + 案】 is still empty.
+                blocks.append(''.join(p.get('s') or '' for p in value if p.get('t') == 'text'))
+                for part in value:
+                    if part.get('t') == 'img' and (part.get('src') or part.get('sha')):
+                        has_media = True
+                    if part.get('omml') and not answer_text_content(part.get('s')):
+                        try:
+                            formula = ET.fromstring(part['omml'])
+                            formula_text = ''.join(n.text or '' for n in formula.iter() if local(n.tag) == 't')
+                            if answer_text_content(formula_text) or any(local(n.tag) == 'chr' and n.get(M+'val') for n in formula.iter()):
+                                has_media = True
+                        except (ET.ParseError, TypeError):
+                            # Preserve an unreadable existing formula for manual inspection.
+                            has_media = True
+            else:
+                for child in value:
+                    walk(child)
+        elif isinstance(value, dict):
+            if value.get('t') == 'table':
+                walk(value.get('rows') or [])
+            elif value.get('t') in ('text', 'img'):
+                walk([value])
+    walk(segments or [])
+    if has_media or answer_text_content('\n'.join(blocks)):
+        return True
+    if not plain:
+        return False
+    try:
+        formatted_text = answer_text_content('\n'.join(item_plain(item) for item in segments))
+    except (KeyError, TypeError, AttributeError):
+        return True
+    # Empty tables generate literal | separators in the saved text. Only ignore
+    # these when the rich source itself proves that its cells contain no answer.
+    return plain != formatted_text
+
+
 QTYPE_HEADER = re.compile(
     r"^(?:[一二三四五六七八九十]+\s*[、.．:：]\s*)?"
     r"(?:不定项选择题|单选题|多选题|填空题|简答题|实验题|计算题|选择题)"
@@ -3183,6 +3245,8 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True, keep_an
         reviewed = aianswers.export_text(con, row['id'])
         if reviewed is not None:
             text, saved = reviewed, []
+        if not answer_has_content(text, saved):
+            return
         # The current answer is authoritative; stale imported formatting must
         # not replace a later edit. Image-only answers also count as existing.
         saved_text = '\n'.join(item_plain(item) for item in saved).strip()

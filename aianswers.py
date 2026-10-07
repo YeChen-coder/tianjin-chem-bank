@@ -103,7 +103,7 @@ def _token(con, row):
 
 def has_answer(con, row):
     # An image-only answer is also an existing answer and must not be overwritten.
-    return bool((row['answer'] or '').strip() or _rich_answer(con, row['id']))
+    return banklib.answer_has_content(row['answer'], _rich_answer(con, row['id']))
 
 
 def _public_job(row):
@@ -128,17 +128,24 @@ def state(con, qid):
     if stale:
         # Never present a previous stem's verification as applying to this stem.
         parts = [dict(p, status='STALE', reason='题目或答案已修改，请老师重新核对') for p in parts]
+    else:
+        parts = [dict(p, status='MISSING', answer='',
+                      draft=banklib.answer_text_content(p.get('draft', p.get('answer', ''))),
+                      reason='只有答案标题，尚未填写实际答案')
+                 if p['status'] in ('CONFIRMED', 'TEACHER') and not banklib.answer_text_content(p.get('answer', ''))
+                 else p for p in parts]
     latest = con.execute('SELECT * FROM answer_jobs WHERE question_id=? ORDER BY id DESC LIMIT 1',
                          (qid,)).fetchone()
-    return {'question_id': qid, 'answer': row['answer'] or '', 'revision': _token(con, row),
-            'parts': parts, 'stale': stale, 'has_answer': has_answer(con, row),
+    substantive = has_answer(con, row)
+    return {'question_id': qid, 'answer': banklib.answer_text_content(row['answer']) if substantive else '', 'revision': _token(con, row),
+            'parts': parts, 'stale': stale, 'has_answer': substantive,
             'job': _public_job(latest), 'prompt_version': (payload or {}).get('prompt_version')}
 
 
 def _publish(parts):
     lines = []
     for part in parts:
-        if part['status'] not in ('CONFIRMED', 'TEACHER') or not part.get('answer', '').strip():
+        if part['status'] not in ('CONFIRMED', 'TEACHER') or not banklib.answer_text_content(part.get('answer', '')):
             continue
         prefix = '' if len(parts) == 1 and part['label'] == '整题' else part['label'] + '：'
         text = prefix + part['answer'].strip()
@@ -157,7 +164,7 @@ def export_text(con, qid):
     lines = []
     for part in current['parts']:
         prefix = '' if len(current['parts']) == 1 and part['label'] == '整题' else part['label'] + '：'
-        if part['status'] in ('CONFIRMED', 'TEACHER') and part.get('answer', '').strip():
+        if part['status'] in ('CONFIRMED', 'TEACHER') and banklib.answer_text_content(part.get('answer', '')):
             lines.append(prefix + part['answer'].strip())
             if part.get('explanation'):
                 lines.append('解析：' + part['explanation'].strip())
@@ -218,12 +225,13 @@ def edit_answer(con, qid, data):
                 return None, '小问不存在'
             current_state = state(con, qid)
             was_confirmed = part['status'] in ('CONFIRMED', 'TEACHER') and not current_state['stale']
-            if data.get('confirm') and not answer:
-                return None, '请先填写这一小问的答案'
+            substantive = bool(banklib.answer_text_content(answer))
+            if data.get('confirm') and not substantive:
+                return None, '请先填写这一小问的实际答案，不能只有“【答案】”标题'
             part['draft'] = answer
             if data.get('confirm') or was_confirmed:
-                part.update(status='TEACHER' if answer else 'MISSING', answer=answer,
-                            explanation='', reason='教师已修改并保存' if answer else '答案已清空',
+                part.update(status='TEACHER' if substantive else 'MISSING', answer=answer if substantive else '',
+                            explanation='', reason='教师已修改并保存' if substantive else '尚未填写实际答案',
                             edited_at=_now())
             # Preserve stale status of the other subparts after a stem change.
             if current_state['stale']:
@@ -234,8 +242,9 @@ def edit_answer(con, qid, data):
             # Manual whole-answer editor for imported answers or a blank question.
             history = (payload or {}).get('parts', [])
             payload = {'parts': [{'id': 'p1', 'label': '整题', 'prompt': '',
-                        'answer': answer, 'draft': answer, 'explanation': '',
-                        'status': 'TEACHER' if answer else 'MISSING', 'reason': '教师已填写并保存',
+                        'answer': answer if banklib.answer_text_content(answer) else '', 'draft': answer, 'explanation': '',
+                        'status': 'TEACHER' if banklib.answer_text_content(answer) else 'MISSING',
+                        'reason': '教师已填写并保存' if banklib.answer_text_content(answer) else '尚未填写实际答案',
                         'candidates': [], 'edited_at': _now()}], 'previous_parts': history}
         _write_record(con, row, payload)
         con.commit()
@@ -271,7 +280,10 @@ def enqueue(con, paper_id, question_id=None, retry=False):
             _, payload = _record(con, qid)
             s = state(con, qid)
             pending = s['stale'] or any(p['status'] not in ('CONFIRMED', 'TEACHER') for p in s['parts'])
-            if (has_answer(con, row) or (payload and any(p.get('candidates') for p in payload['parts']))) and not (retry and pending):
+            has_candidates = bool(payload and any(
+                banklib.answer_text_content(c.get('answer', '')) for p in payload['parts']
+                for c in p.get('candidates', []) if isinstance(c, dict)))
+            if (has_answer(con, row) or has_candidates) and not (retry and pending):
                 skipped += 1
                 continue
             snapshot = {'stem_hash': stem_hash(row), 'revision': _token(con, row),
@@ -557,12 +569,12 @@ def evaluate(snapshot, progress):
             candidates.append(dict(part, attempt=solution['attempt'], model=solution['model']))
         judge = judged.get(pid, {})
         full = len(candidates) == 3 and all(p['conditions_sufficient'] and p['image_clear']
-                and p['answer'].strip() and p['answer'].strip() not in ('略', '待补充', '无', '答案略')
+                and banklib.answer_text_content(p['answer']) and p['answer'].strip() not in ('略', '待补充', '无', '答案略')
                 and p['reason'].strip() for p in candidates)
         checked = judge.get('candidate_checks', [])
         verified = (full and not unknown_coverage and judge.get('equivalent') is True
                     and judge.get('verified') is True and len(checked) == 3
-                    and all(c['correct'] for c in checked) and judge.get('answer', '').strip()
+                    and all(c['correct'] for c in checked) and banklib.answer_text_content(judge.get('answer', ''))
                     and judge.get('explanation', '').strip())
         if snapshot['qtype'] in ('单选题', '多选题'):
             # A semantic judge must not override conflicting option letters.
@@ -619,7 +631,9 @@ def evaluate(snapshot, progress):
     # Retrying unresolved answers must preserve previously confirmed teacher/AI answers.
     previous = snapshot.get('previous') or {}
     if previous.get('parts'):
-        preserved = {p['id']: p for p in previous['parts'] if p['status'] in ('CONFIRMED', 'TEACHER')}
+        preserved = {p['id']: p for p in previous['parts']
+                     if p['status'] in ('CONFIRMED', 'TEACHER')
+                     and banklib.answer_text_content(p.get('answer', ''))}
         # Retry planning may number parts differently; match by exact label + prompt, never by ID alone.
         for index, part in enumerate(output):
             old = next((p for p in preserved.values() if p['label'] == part['label'] and p['prompt'] == part['prompt']), None)

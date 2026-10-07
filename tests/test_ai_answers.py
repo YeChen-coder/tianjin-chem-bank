@@ -89,6 +89,179 @@ def test_image_only_existing_answer_skipped(bank):
     assert not err and not result['jobs'] and result['skipped'] == 1
 
 
+@pytest.mark.parametrize('text', ['【答案】', '【 答案 】 ：\n\u3000', '[答案]', '答案：',
+                                 '参考答案', '【答案】\n【解析】', '\ufeff【答案】\u200b'])
+def test_heading_only_answers_are_missing_in_legacy_bank(bank, text):
+    con, pid = bank
+    segments = [[{'t': 'text', 's': text}]]
+    con.execute('UPDATE questions SET answer=? WHERE id=1', (text,))
+    con.execute('UPDATE question_metadata SET payload=? WHERE question_id=1',
+                (json.dumps({'answer_segments': segments}),))
+    con.commit()
+    state = aa.state(con, 1)
+    assert not state['has_answer'] and not state['answer']
+    result, err = aa.enqueue(con, pid, 1)
+    assert not err and len(result['jobs']) == 1 and result['skipped'] == 0
+    # Interpretation only: old data and the saved paper have not been rewritten.
+    assert con.execute('SELECT answer FROM questions WHERE id=1').fetchone()[0] == text
+    assert b.get_paper(con, pid)['ids'] == [1, 2]
+
+
+def test_empty_rich_blocks_and_split_heading_do_not_count_as_answers(bank):
+    con, pid = bank
+    for segments in ([[]], [[{'t': 'text', 's': '【答'}, {'t': 'text', 's': '案】'}]],
+                     [{'t': 'table', 'rows': [[[{'t': 'text', 's': '答案'}], []],
+                                            [[{'t': 'text', 's': '解析'}], []]]}]):
+        assert not b.answer_has_content('【答案】', segments)
+        con.execute('UPDATE questions SET answer=? WHERE id=1', ('【答案】',))
+        con.execute('UPDATE question_metadata SET payload=? WHERE question_id=1',
+                    (json.dumps({'answer_segments': segments}),)); con.commit()
+        assert not aa.state(con, 1)['has_answer']
+
+
+def test_empty_table_separators_are_not_answers_but_manual_text_is():
+    segments = [[{'t': 'text', 's': '【答案】'}],
+                {'t': 'table', 'rows': [[[{'t': 'text', 's': '答案'}], []],
+                                       [[{'t': 'text', 's': '解析'}], []]]}]
+    saved_text = '\n'.join(b.item_plain(item) for item in segments)
+    assert not b.answer_has_content(saved_text, segments)
+    assert b.answer_has_content('教师填写的真实答案', segments)
+    assert b.answer_has_content('|', [[{'t': 'text', 's': '|'}]])
+
+
+def test_empty_math_format_does_not_count_as_answer():
+    empty = '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t> </m:t></m:r></m:oMath>'
+    real = '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>H₂O</m:t></m:r></m:oMath>'
+    assert not b.answer_has_content('【答案】', [[{'t': 'text', 's': '', 'omml': empty}]])
+    assert b.answer_has_content('【答案】', [[{'t': 'text', 's': '', 'omml': real}]])
+
+
+@pytest.mark.parametrize('text', ['【答案】B', '答案：0', '【答案】无', '【答案】H₂O',
+                                 '【答案】\n【解析】根据质量守恒定律计算。'])
+def test_substantive_answers_with_heading_still_skip(bank, text):
+    con, pid = bank
+    con.execute('UPDATE questions SET answer=? WHERE id=1', (text,)); con.commit()
+    result, err = aa.enqueue(con, pid, 1)
+    assert not err and result['skipped'] == 1 and not result['jobs']
+    assert con.execute('SELECT answer FROM questions WHERE id=1').fetchone()[0] == text
+
+
+def test_images_and_math_with_empty_answer_heading_are_preserved():
+    assert b.answer_has_content('【答案】', [[{'t': 'text', 's': '【答案】'},
+                                           {'t': 'img', 'src': '/media/' + 'a'*64 + '.png'}]])
+    assert b.answer_has_content('【答案】', [{'t': 'table', 'rows': [[[{'t': 'img', 'sha': 'a'*64}]]]}])
+    assert b.answer_has_content('【答案】', [[{'t': 'text', 's': '', 'omml': '<m:oMath>formula</m:oMath>'}]])
+
+
+def test_heading_only_old_answer_can_be_filled_and_replaces_empty_format(bank, monkeypatch):
+    con, pid = bank
+    con.execute('UPDATE questions SET answer=? WHERE id=1', ('【答案】',))
+    con.execute('UPDATE question_metadata SET payload=? WHERE question_id=1',
+                (json.dumps({'answer_segments': [[{'t': 'text', 's': '【答案】'}]]}),)); con.commit()
+    responses(monkeypatch, disagree=False)
+    _, state = run_first(con, pid)
+    assert state['has_answer'] and 'H2O' in state['answer'] and '氮气' in state['answer']
+    assert not json.loads(con.execute('SELECT payload FROM question_metadata WHERE question_id=1').fetchone()[0]).get('answer_segments')
+    assert b.get_paper(con, pid)['ids'] == [1, 2]
+
+
+def test_export_does_not_attach_an_empty_answer_heading(bank, tmp_path):
+    con, _ = bank
+    con.execute('UPDATE questions SET answer=? WHERE id=1', ('【答案】',))
+    con.execute('UPDATE question_metadata SET payload=? WHERE question_id=1',
+                (json.dumps({'answer_segments': [[{'t': 'text', 's': '【答案】'}]]}),)); con.commit()
+    path = tmp_path/'empty-answers.docx'
+    b.export_docx([1], str(path), keep_answers=True)
+    with zipfile.ZipFile(path) as archive:
+        text = ''.join(ET.fromstring(archive.read('word/document.xml')).itertext())
+    assert '【答案】' not in text and '答案：' not in text
+
+
+def test_placeholder_cannot_be_manually_confirmed_or_published(bank, monkeypatch):
+    con, pid = bank
+    state, err = aa.edit_answer(con, 1, {'revision': aa.state(con, 1)['revision'], 'answer': '【答案】'})
+    assert not err and not state['has_answer'] and state['parts'][0]['status'] == 'MISSING'
+    state2, err = aa.edit_answer(con, 1, {'revision': state['revision'], 'part_id': 'p1', 'answer': '【答案】', 'confirm': True})
+    assert state2 is None and '实际答案' in err
+
+
+def test_generated_empty_heading_never_becomes_confirmed_answer(bank, monkeypatch):
+    con, pid = bank
+    responses(monkeypatch, disagree=False)
+    original = ai.complete_role
+    def placeholder(role, system, text, images=None):
+        raw, model = original(role, system, text, images)
+        value = json.loads(raw)
+        if system in (aa.SOLVE, aa.JUDGE):
+            for part in value['parts']:
+                part['answer'] = '【答案】'
+        return json.dumps(value, ensure_ascii=False), model
+    monkeypatch.setattr(ai, 'complete_role', placeholder)
+    _, state = run_first(con, pid)
+    assert not state['has_answer'] and not state['answer']
+    assert all(p['status'] == 'SUSPECT' for p in state['parts'])
+    # Empty candidate headings also do not permanently block the next bulk run.
+    result, err = aa.enqueue(con, pid, 1)
+    assert not err and result['skipped'] == 0 and len(result['jobs']) == 1
+
+
+def test_legacy_placeholder_record_is_missing_in_public_state_and_bulk(bank):
+    con, pid = bank
+    con.row_factory = __import__('sqlite3').Row
+    row = con.execute('SELECT * FROM questions WHERE id=1').fetchone()
+    value = {'published': '【答案】', 'parts': [{'id': 'p1', 'label': '整题', 'prompt': '',
+             'status': 'TEACHER', 'answer': '【答案】', 'draft': '【答案】', 'candidates': []}]}
+    con.execute('UPDATE questions SET answer=? WHERE id=1', ('【答案】',))
+    con.execute('INSERT INTO answer_records VALUES(?,?,?,?,?)',
+                (1, 1, aa.stem_hash(row), json.dumps(value), aa._now())); con.commit()
+    state = aa.state(con, 1)
+    assert not state['has_answer'] and state['parts'][0]['status'] == 'MISSING'
+    assert not state['parts'][0]['draft']
+    result, err = aa.enqueue(con, pid, 1)
+    assert not err and result['skipped'] == 0 and len(result['jobs']) == 1
+
+
+def test_retry_does_not_preserve_a_falsely_confirmed_empty_heading(bank, monkeypatch):
+    con, pid = bank
+    responses(monkeypatch, disagree=False)
+    _, state = run_first(con, pid)
+    record, payload = aa._record(con, 1)
+    payload['parts'][0].update(answer='【答案】', draft='【答案】', status='TEACHER')
+    payload['published'] = aa._publish(payload['parts'])
+    con.execute('UPDATE questions SET answer=? WHERE id=1', (payload['published'],))
+    con.execute('UPDATE answer_records SET payload=? WHERE question_id=1', (json.dumps(payload),)); con.commit()
+    responses(monkeypatch, disagree=False)
+    queued, err = aa.enqueue(con, pid, 1, retry=True)
+    assert not err and queued['jobs']
+    jid = aa._claim(con); aa.run_job(con, jid)
+    state = aa.state(con, 1)
+    assert state['parts'][0]['status'] == 'CONFIRMED' and state['parts'][0]['answer'] == 'H2O'
+
+
+def test_ai_rewrite_rejects_heading_only_answers():
+    with pytest.raises(ai.ModelError) as exc:
+        ai._validate_role_response(ai.SYSTEM_GENERATOR, '{"answer":"【答案】"}')
+    assert exc.value.kind == 'answer'
+
+
+def test_api_placeholder_is_missing_and_enqueued_without_data_cleanup(service, monkeypatch):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    con = b.open_db()
+    con.execute('UPDATE questions SET answer=? WHERE id=1', ('【答案】',))
+    con.execute('UPDATE question_metadata SET payload=? WHERE question_id=1',
+                (json.dumps({'answer_segments': [[{'t': 'text', 's': '【答案】'}]]}),)); con.commit(); con.close()
+    pid = json.loads(service('/api/papers', {'name': '旧题库验证卷', 'ids': [1]})[1])['id']
+    state = json.loads(service('/api/questions/1/answer')[1])
+    assert not state['has_answer'] and not state['answer']
+    status, raw = service('/api/papers/%s/ai-answers' % pid, {})
+    result = json.loads(raw)
+    assert status == 200 and result['skipped'] == 0 and len(result['jobs']) == 1
+    con = b.open_db()
+    assert con.execute('SELECT answer FROM questions WHERE id=1').fetchone()[0] == '【答案】'
+    assert b.get_paper(con, pid)['ids'] == [1]
+    con.close()
+
+
 def test_three_blind_solutions_semantic_equivalence_and_local_disagreement(bank, monkeypatch):
     con, pid = bank
     calls = responses(monkeypatch)

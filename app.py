@@ -2322,7 +2322,7 @@ function mountAnswerPanel(holder, item) {
   function updateSummary() {
     const pending = state.parts.filter(p => !['CONFIRMED', 'TEACHER'].includes(p.status)).length;
     summary.textContent = '答案 / 解析 · ' + (pending ? pending + ' 个小问待确认' :
-      (state.answer || state.has_answer ? '已保存，可编辑' : '未填写，可编辑'));
+      (state.has_answer ? '已保存，可编辑' : '未填写，可编辑'));
     const job = state.job;
     jobLine.textContent = job ? job.message + (job.error ? '：' + aiFriendlyError(job.error).replace(/改写/g, '作答').replace(/完整题目/g, '完整答案').replace(/新题/g, '答案').replace(/重新生成/g, '重新作答') : '') : '';
     if (job && ['queued', 'running'].includes(job.status)) panel.open = true;
