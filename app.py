@@ -102,6 +102,17 @@ PAGE = r"""<!DOCTYPE html>
   .answer-actions:not(:empty) { margin-top: 8px; }
   .answer-candidate { white-space: pre-wrap; padding: 6px 0; border-bottom: 1px dashed #ddd; }
   #answer-msg { font-size: 13px; color: #485865; }
+  #bank-answer-msg { font-size: 13px; color: #485865; }
+  .bank-answer-dialog { width: min(560px, calc(100vw - 40px)); box-sizing: border-box; border: 2px solid #b91c1c; border-radius: 10px; padding: 22px; max-height: calc(100vh - 40px); overflow: auto; }
+  .bank-answer-dialog::backdrop { background: rgba(0,0,0,.5); }
+  .bank-answer-dialog h2 { margin: 0 0 14px; font-size: 20px; }
+  .bank-answer-dialog p { line-height: 1.7; }
+  .bank-answer-dialog .warning { color: #b91c1c; font-weight: 700; }
+  .bank-answer-dialog label { display: block; margin: 16px 0 6px; }
+  .bank-answer-dialog input { width: 100%; box-sizing: border-box; padding: 10px; font: inherit; border: 1px solid #adb5bd; border-radius: 6px; }
+  .bank-answer-dialog .row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  #bank-answer-start { background: #b91c1c; }
+  #bank-answer-start:disabled { background: #98a0a8; cursor: not-allowed; }
   .pager { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
   label.chk, .chk { display: flex; gap: 8px; align-items: flex-start; }
   .empty { color: #777; padding: 24px; }
@@ -242,6 +253,8 @@ PAGE = r"""<!DOCTYPE html>
     <button id="ai-stop-all" class="secondary" type="button">叫停所有当前AI生成</button>
     <button id="ai-compose" type="button" hidden>AI改写</button>
     <button id="ai-answers" type="button" hidden title="只给当前试卷中没有答案的题作答，已有答案会跳过">AI批量补答案</button>
+    <button id="ai-bank-answers" class="secondary" type="button">对所有无答案的题目批量AI生成答案</button>
+    <span id="bank-answer-msg" role="status"></span>
     <span id="answer-msg" role="status"></span>
     <span id="ai-intensity-wrap" hidden>改动
       <select id="ai-intensity" title="变式改动程度">
@@ -254,6 +267,20 @@ PAGE = r"""<!DOCTYPE html>
   </div>
   <div id="list"></div>
 </main>
+<dialog id="bank-answer-confirm" class="bank-answer-dialog" aria-labelledby="bank-answer-title">
+  <form id="bank-answer-form">
+    <h2 id="bank-answer-title">确认对整个题库批量生成答案？</h2>
+    <p class="warning">此操作资源消耗巨大，耗时可能非常长。</p>
+    <p>将处理整个题库中没有答案的题目，不只是当前页面、勾选的题目或当前筛选结果。每题还要多次独立作答和核对，可能消耗大量 AI 额度并产生费用，耗时可能达到数小时甚至更久。已有答案和待老师确认的结果会跳过。</p>
+    <p><strong>强烈推荐：先把选定的题目加入试卷，再从试卷里批量生成答案。</strong></p>
+    <label for="bank-answer-agreement">仍要处理整个题库，请完整输入“我同意”：</label>
+    <input id="bank-answer-agreement" type="text" autocomplete="off" spellcheck="false" placeholder="我同意"/>
+    <div class="row">
+      <button id="bank-answer-cancel" type="button">取消</button>
+      <button id="bank-answer-start" type="submit" disabled>开始全题库任务</button>
+    </div>
+  </form>
+</dialog>
 <script>
 const major = document.getElementById('major');
 const minor = document.getElementById('minor');
@@ -1197,8 +1224,8 @@ async function load() {
       }
       list.appendChild(renderQuestion(it));
     });
-    if (window.chemBankMountAi) window.chemBankMountAi();
   }
+  if (window.chemBankMountAi) window.chemBankMountAi();
   paintAllPicks();
   const page = Math.floor(offset / limit) + 1;
   const pages = Math.max(1, Math.ceil(total / limit));
@@ -1295,6 +1322,10 @@ function syncAiCompose() {
   btn.hidden = !on;
   const answers = document.getElementById('ai-answers');
   if (answers) answers.hidden = !answerPaperId();
+  const bankAnswers = document.getElementById('ai-bank-answers');
+  if (bankAnswers) bankAnswers.hidden = !!answerPaperId();
+  const bankMessage = document.getElementById('bank-answer-msg');
+  if (bankMessage) bankMessage.hidden = !!answerPaperId();
   const answerMessage = document.getElementById('answer-msg');
   if (answerMessage) answerMessage.hidden = !answerPaperId();
   const wrap = document.getElementById('ai-intensity-wrap');
@@ -2305,6 +2336,7 @@ document.getElementById('ai-stop-all').addEventListener('click', async () => {
 
 let answerPollTimer = null;
 let answerRefreshing = false;
+let bankAnswerSubmitting = false;
 const answerStatusNames = {CONFIRMED: '三次作答一致，独立核对已通过', TEACHER: '教师已确认',
   SUSPECT: '存疑 · 请老师确认', MISSING: '尚未填写', STALE: '题目已修改 · 请重新核对'};
 
@@ -2480,7 +2512,6 @@ async function answerRefresh() {
   if (answerRefreshing) return;
   const panels = [...document.querySelectorAll('.answer-panel')];
   const paper = answerPaperId();
-  if (!paper && !panels.length) return;
   answerRefreshing = true;
   try {
     const url = paper ? '/api/papers/' + paper + '/answers' : '/api/answers?ids=' + panels.map(p => p.dataset.questionId).join(',');
@@ -2488,7 +2519,8 @@ async function answerRefresh() {
     const data = await r.json();
     const byId = new Map((data.items || []).map(s => [String(s.question_id), s]));
     panels.forEach(p => { const s = byId.get(p.dataset.questionId); if (s && p.answerController) p.answerController.update(s); });
-    if (data.active) answerStartPoll();
+    const bankActive = paper ? false : await bankAnswerRefresh();
+    if (data.active || bankActive) answerStartPoll();
     else if (answerPollTimer) { clearInterval(answerPollTimer); answerPollTimer = null; }
     if (paper) {
       const active = (data.items || []).filter(s => s.job && ['queued', 'running'].includes(s.job.status)).length;
@@ -2518,6 +2550,68 @@ document.getElementById('ai-answers').onclick = async () => {
   } catch (e) { message.textContent = e.message; }
   finally { btn.disabled = false; }
 };
+
+async function bankAnswerRefresh() {
+  const r = await fetch('/api/answers/bank-status');
+  if (!r.ok) return false;
+  const data = await r.json();
+  const batch = data.batch;
+  const button = document.getElementById('ai-bank-answers');
+  const message = document.getElementById('bank-answer-msg');
+  button.disabled = bankAnswerSubmitting || !!(batch && batch.active);
+  if (!batch) return false;
+  if (batch.active) {
+    message.textContent = '全题库任务：已处理 ' + batch.done + ' 题，还有 ' + batch.active + ' 题等待或正在处理。可用“叫停所有当前AI生成”停止。';
+  } else if (batch.cancelled) {
+    message.textContent = '全题库任务已结束：' + batch.done + ' 题已处理，' + batch.cancelled + ' 题已叫停。已保存结果保留。';
+  } else {
+    message.textContent = '全题库任务已结束：处理 ' + batch.done + ' 题，跳过 ' + batch.skipped + ' 题已有答案或待确认结果。';
+  }
+  if (batch.failed) message.textContent += ' ' + batch.failed + ' 题未完成，请查看题目下方说明。';
+  if (batch.done) message.textContent += ' 处理结果可能有存疑小问，请老师核对。';
+  return !!batch.active;
+}
+
+function mountBankAnswerConfirmation() {
+  const button = document.getElementById('ai-bank-answers');
+  const dialog = document.getElementById('bank-answer-confirm');
+  const input = document.getElementById('bank-answer-agreement');
+  const start = document.getElementById('bank-answer-start');
+  const message = document.getElementById('bank-answer-msg');
+  button.onclick = () => {
+    if (answerPaperId() || button.disabled || bankAnswerSubmitting) return;
+    input.value = '';
+    start.disabled = true;
+    dialog.showModal();
+    input.focus();
+  };
+  input.oninput = () => { start.disabled = input.value !== '我同意' || bankAnswerSubmitting; };
+  document.getElementById('bank-answer-cancel').onclick = () => dialog.close();
+  document.getElementById('bank-answer-form').onsubmit = async event => {
+    event.preventDefault();
+    if (!dialog.open || input.value !== '我同意' || bankAnswerSubmitting) return;
+    bankAnswerSubmitting = true;
+    start.disabled = true;
+    button.disabled = true;
+    const confirmation = input.value;
+    dialog.close();
+    message.textContent = '正在扫描整个题库并安排任务，请稍候……';
+    try {
+      const r = await fetch('/api/answers/bank-generate', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({confirmation})});
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || '没有开始全题库任务');
+      message.textContent = '全题库：已安排 ' + data.queued + ' 题，另有 ' + data.already_running + ' 题已在处理，跳过 ' + data.skipped + ' 题已有答案或待确认结果。';
+      if (data.queued || data.already_running) answerStartPoll();
+    } catch (error) { message.textContent = error.message; }
+    finally {
+      bankAnswerSubmitting = false;
+      button.disabled = false;
+      start.disabled = input.value !== '我同意';
+    }
+    answerRefresh().catch(() => {});
+  };
+}
+mountBankAnswerConfirmation();
 
 paperReady = true;
 const savedPaper = new URL(location.href).searchParams.get('paper');
@@ -2701,9 +2795,10 @@ def db():
 
 
 def _handle_answers_post(handler, path, raw):
+    bank_batch = path == '/api/answers/bank-generate'
     batch = re.fullmatch(r'/api/papers/(\d+)/ai-answers', path)
     single = re.fullmatch(r'/api/questions/(\d+)/(ai-answer|answer)', path)
-    if not batch and not single:
+    if not batch and not single and not bank_batch:
         return False
     data = _ai_body(raw)
     if data is None:
@@ -2712,7 +2807,9 @@ def _handle_answers_post(handler, path, raw):
     with LOCK:
         con = db()
         try:
-            if batch:
+            if bank_batch:
+                result, error = aianswers.enqueue_bank(con, data.get('confirmation'))
+            elif batch:
                 result, error = aianswers.enqueue(con, int(batch[1]))
             elif single[2] == 'answer':
                 result, error = aianswers.edit_answer(con, int(single[1]), data)
@@ -2797,6 +2894,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == '/api/answers/bank-status':
+            with LOCK:
+                con = db()
+                try:
+                    result = aianswers.bank_status(con)
+                finally:
+                    con.close()
+            _ai_send(self, 200, {'batch': result})
+            return
         answer_paper = re.fullmatch(r'/api/papers/(\d+)/answers', u.path)
         answer_one = re.fullmatch(r'/api/questions/(\d+)/answer', u.path)
         if answer_paper or answer_one or u.path == '/api/answers':

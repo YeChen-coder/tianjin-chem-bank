@@ -75,6 +75,14 @@ def ensure_schema(con):
         CREATE INDEX IF NOT EXISTS idx_answer_jobs_status ON answer_jobs(status, id);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_answer_jobs_active
             ON answer_jobs(question_id) WHERE status IN ('queued','running');
+        CREATE TABLE IF NOT EXISTS answer_bank_batches (
+            id INTEGER PRIMARY KEY, total INTEGER NOT NULL, skipped INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS answer_bank_batch_jobs (
+            batch_id INTEGER NOT NULL, job_id INTEGER NOT NULL,
+            PRIMARY KEY (batch_id, job_id)
+        );
     ''')
     con.commit()
 
@@ -261,7 +269,8 @@ def enqueue(con, paper_id, question_id=None, retry=False):
     if question_id is not None and (not isinstance(question_id, int) or isinstance(question_id, bool) or question_id <= 0):
         return None, '请指定一道题目'
     if paper_id is None:
-        # Bank view supports exactly one visible question, never a bank-wide job.
+        # Ordinary bank requests support exactly one question. The separate
+        # full-bank entry point requires its own explicit confirmation.
         if question_id is None:
             return None, '批量补答案必须指定一套试卷'
         visible = con.execute('SELECT 1 FROM questions WHERE id=? AND ' + banklib.questions_visible_clause(),
@@ -278,38 +287,82 @@ def enqueue(con, paper_id, question_id=None, retry=False):
             if question_id not in ids:
                 return None, '这道题不在当前试卷中'
             ids = [question_id]
-    jobs, skipped = [], 0
     con.execute('BEGIN IMMEDIATE')
     try:
-        for qid in ids:
-            row = con.execute('SELECT * FROM questions WHERE id=?', (qid,)).fetchone()
-            if not row:
-                continue
-            existing = con.execute("SELECT id FROM answer_jobs WHERE question_id=? AND status IN ('queued','running')", (qid,)).fetchone()
-            if existing:
-                jobs.append({'id': existing[0], 'question_id': qid, 'duplicate': True})
-                continue
-            _, payload = _record(con, qid)
-            s = state(con, qid)
-            pending = s['stale'] or any(p['status'] not in ('CONFIRMED', 'TEACHER') for p in s['parts'])
-            has_candidates = bool(payload and any(
-                banklib.answer_text_content(c.get('answer', '')) for p in payload['parts']
-                for c in p.get('candidates', []) if isinstance(c, dict)))
-            if (has_answer(con, row) or has_candidates) and not (retry and pending):
-                skipped += 1
-                continue
-            snapshot = {'stem_hash': stem_hash(row), 'revision': _token(con, row),
-                        'body': row['body'], 'qtype': row['qtype'],
-                        'segments': json.loads(row['segments'] or '[]'),
-                        'previous': payload if retry and not s['stale'] else None}
-            cur = con.execute('''INSERT INTO answer_jobs(question_id,paper_id,status,phase,snapshot,created_at)
-                              VALUES(?,?,'queued','queued',?,?)''', (qid, paper_id, _json(snapshot), _now()))
-            jobs.append({'id': cur.lastrowid, 'question_id': qid, 'duplicate': False})
+        result = _enqueue_ids(con, paper_id, ids, retry)
         con.commit()
-        return {'jobs': jobs, 'skipped': skipped}, None
+        return result, None
     finally:
         if con.in_transaction:
             con.rollback()
+
+
+def _enqueue_ids(con, paper_id, ids, retry=False):
+    """Shared eligibility and deduplication, within the caller's write transaction."""
+    jobs, skipped = [], 0
+    for qid in ids:
+        row = con.execute('SELECT * FROM questions WHERE id=?', (qid,)).fetchone()
+        if not row:
+            continue
+        existing = con.execute("SELECT id FROM answer_jobs WHERE question_id=? AND status IN ('queued','running')", (qid,)).fetchone()
+        if existing:
+            jobs.append({'id': existing[0], 'question_id': qid, 'duplicate': True})
+            continue
+        _, payload = _record(con, qid)
+        s = state(con, qid)
+        pending = s['stale'] or any(p['status'] not in ('CONFIRMED', 'TEACHER') for p in s['parts'])
+        has_candidates = bool(payload and any(
+            banklib.answer_text_content(c.get('answer', '')) for p in payload['parts']
+            for c in p.get('candidates', []) if isinstance(c, dict)))
+        if (has_answer(con, row) or has_candidates) and not (retry and pending):
+            skipped += 1
+            continue
+        snapshot = {'stem_hash': stem_hash(row), 'revision': _token(con, row),
+                    'body': row['body'], 'qtype': row['qtype'],
+                    'segments': json.loads(row['segments'] or '[]'),
+                    'previous': payload if retry and not s['stale'] else None}
+        cur = con.execute('''INSERT INTO answer_jobs(question_id,paper_id,status,phase,snapshot,created_at)
+                          VALUES(?,?,'queued','queued',?,?)''', (qid, paper_id, _json(snapshot), _now()))
+        jobs.append({'id': cur.lastrowid, 'question_id': qid, 'duplicate': False})
+    return {'jobs': jobs, 'skipped': skipped}
+
+
+def enqueue_bank(con, confirmation):
+    """The only full-bank entry point: never start without the exact opt-in phrase."""
+    if confirmation != '我同意':
+        return None, '未开始：只有完整输入“我同意”才能启动全题库任务'
+    if os.environ.get('CHEM_DISABLE_AI') == '1':
+        return None, '隔离开发预览已停用 AI'
+    _rows(con)
+    con.execute('BEGIN IMMEDIATE')
+    try:
+        ids = [r[0] for r in con.execute('SELECT id FROM questions WHERE ' + banklib.questions_visible_clause() + ' ORDER BY id')]
+        cur = con.execute('INSERT INTO answer_bank_batches(total,created_at) VALUES(?,?)', (len(ids), _now()))
+        batch_id = cur.lastrowid
+        result = _enqueue_ids(con, None, ids)
+        con.executemany('INSERT INTO answer_bank_batch_jobs(batch_id,job_id) VALUES(?,?)',
+                        [(batch_id, job['id']) for job in result['jobs']])
+        con.execute('UPDATE answer_bank_batches SET skipped=? WHERE id=?', (result['skipped'], batch_id))
+        con.commit()
+        return {'batch_id': batch_id, 'total': len(ids), 'skipped': result['skipped'],
+                'queued': sum(not job['duplicate'] for job in result['jobs']),
+                'already_running': sum(job['duplicate'] for job in result['jobs'])}, None
+    finally:
+        if con.in_transaction:
+            con.rollback()
+
+
+def bank_status(con):
+    _rows(con)
+    batch = con.execute('SELECT * FROM answer_bank_batches ORDER BY id DESC LIMIT 1').fetchone()
+    if not batch:
+        return None
+    counts = dict(con.execute('''SELECT j.status, COUNT(*) FROM answer_bank_batch_jobs m
+        JOIN answer_jobs j ON j.id=m.job_id WHERE m.batch_id=? GROUP BY j.status''', (batch['id'],)).fetchall())
+    return {'batch_id': batch['id'], 'total': batch['total'], 'skipped': batch['skipped'],
+            'active': counts.get('queued', 0) + counts.get('running', 0),
+            'done': counts.get('done', 0), 'failed': counts.get('error', 0) + counts.get('stale', 0),
+            'cancelled': counts.get('cancelled', 0), 'created_at': batch['created_at']}
 
 
 def stop_all(con):

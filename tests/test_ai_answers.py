@@ -601,7 +601,7 @@ def test_api_bank_single_button_request_never_fans_out(service, monkeypatch):
     con.close()
 
 
-def test_api_bank_single_ai_disabled_and_no_bank_bulk_endpoint(service):
+def test_api_bank_single_ai_disabled_and_no_ungated_bank_bulk_endpoint(service):
     status, raw = service('/api/questions/1/ai-answer', {})
     assert status == 400 and '停用' in json.loads(raw)['error']
     assert service('/api/ai-answers', {'ids': [1, 2]})[0] != 200
@@ -615,3 +615,108 @@ def test_explicit_paper_single_request_still_requires_membership(service, monkey
     pid = json.loads(service('/api/papers', {'name': '只含第二题', 'ids': [2]})[1])['id']
     status, raw = service('/api/questions/1/ai-answer', {'paper_id': pid})
     assert status == 400 and '不在当前试卷' in json.loads(raw)['error']
+
+
+@pytest.mark.parametrize('confirmation', [None, '', '同意', '我同意 ', ' 我同意', '我同意\n', True, ['我同意']])
+def test_bank_batch_requires_exact_confirmation_before_creating_any_job(bank, confirmation):
+    con, _ = bank
+    result, err = aa.enqueue_bank(con, confirmation)
+    assert result is None and '我同意' in err
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 0
+    assert con.execute('SELECT COUNT(*) FROM answer_bank_batches').fetchone()[0] == 0
+
+
+def test_confirmed_bank_batch_skips_real_answers_images_and_review_candidates(bank):
+    con, _ = bank
+    con.execute('UPDATE questions SET answer=? WHERE id=1', ('【答案】',))
+    con.execute('UPDATE questions SET answer=? WHERE id=2', ('真实教师答案',)); con.commit()
+    image, err = b.insert_handwritten(con, {'body': '有图片答案的题目，请说明原因。', 'qtype': '简答题'})
+    assert not err
+    metadata = {'answer_segments': [[{'t': 'img', 'src': '/media/'+'a'*64+'.png'}]]}
+    con.execute('INSERT OR REPLACE INTO question_metadata(question_id,payload) VALUES(?,?)', (image['id'], json.dumps(metadata)))
+    con.commit()
+    review, err = b.insert_handwritten(con, {'body': '已经有存疑候选的题目，请说明原因。', 'qtype': '简答题'})
+    assert not err
+    con.row_factory = __import__('sqlite3').Row
+    row = con.execute('SELECT * FROM questions WHERE id=?', (review['id'],)).fetchone()
+    aa._write_record(con, row, {'parts': [{'id': 'p1', 'label': '整题', 'prompt': '', 'status': 'SUSPECT',
+                                          'answer': '', 'draft': '可能答案', 'candidates': [{'answer': '可能答案'}]}]})
+    con.commit()
+    hidden, err = b.insert_handwritten(con, {'body': '未收入题库的草稿，请解释原因。', 'qtype': '简答题'})
+    assert not err
+    con.execute('UPDATE questions SET in_bank=0 WHERE id=?', (hidden['id'],)); con.commit()
+    result, err = aa.enqueue_bank(con, '我同意')
+    assert not err and result['total'] == 4 and result['queued'] == 1 and result['skipped'] == 3
+    assert [r[0] for r in con.execute('SELECT question_id FROM answer_jobs')] == [1]
+    assert aa.state(con, 2)['answer'] == '真实教师答案'
+    assert aa.state(con, review['id'])['parts'][0]['status'] == 'SUSPECT'
+
+
+def test_confirmed_bank_batch_deduplicates_and_stop_all_cancels_its_jobs(bank):
+    con, _ = bank
+    first, err = aa.enqueue_bank(con, '我同意')
+    assert not err and first['queued'] == 2
+    second, err = aa.enqueue_bank(con, '我同意')
+    assert not err and second['queued'] == 0 and second['already_running'] == 2
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 2
+    assert aa.bank_status(con)['active'] == 2
+    assert aa.stop_all(con) == 2
+    status = aa.bank_status(con)
+    assert status['active'] == 0 and status['cancelled'] == 2
+
+
+def test_bank_batch_progress_counts_completed_and_cancelled_without_losing_answers(bank, monkeypatch):
+    con, _ = bank
+    responses(monkeypatch, disagree=False)
+    result, err = aa.enqueue_bank(con, '我同意')
+    assert not err
+    jid = aa._claim(con); aa.run_job(con, jid)
+    assert aa.bank_status(con)['done'] == 1 and aa.bank_status(con)['active'] == 1
+    aa.stop_all(con)
+    assert aa.bank_status(con)['cancelled'] == 1
+    assert aa.state(con, 1)['has_answer']
+
+
+def test_bank_batch_partial_enqueue_failure_rolls_back_everything(bank, monkeypatch):
+    con, _ = bank
+    original = aa._enqueue_ids
+    def fail_after_first(connection, paper, ids, retry=False):
+        original(connection, paper, ids[:1], retry)
+        raise RuntimeError('模拟排队失败')
+    monkeypatch.setattr(aa, '_enqueue_ids', fail_after_first)
+    with pytest.raises(RuntimeError):
+        aa.enqueue_bank(con, '我同意')
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 0
+    assert con.execute('SELECT COUNT(*) FROM answer_bank_batches').fetchone()[0] == 0
+    assert not con.in_transaction
+
+
+def test_api_bank_batch_confirmation_disabled_mode_and_status(service, monkeypatch):
+    assert json.loads(service('/api/answers/bank-status')[1])['batch'] is None
+    for body in ({}, {'confirmation': '同意'}, {'confirmation': '我同意 '}):
+        status, raw = service('/api/answers/bank-generate', body)
+        assert status == 400 and '我同意' in json.loads(raw)['error']
+    status, raw = service('/api/answers/bank-generate', {'confirmation': '我同意'})
+    assert status == 400 and '停用' in json.loads(raw)['error']
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    status, raw = service('/api/answers/bank-generate', {'confirmation': '我同意'})
+    assert status == 200 and json.loads(raw)['queued'] == 2
+    assert json.loads(service('/api/answers/bank-status')[1])['batch']['active'] == 2
+    assert service('/api/ai/stop-all', {})[0] == 200
+    assert json.loads(service('/api/answers/bank-status')[1])['batch']['cancelled'] == 2
+
+
+def test_api_bank_batch_is_entire_visible_bank_not_page_filter_or_selection(service, monkeypatch):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    con = b.open_db()
+    for index in range(53):
+        _, err = b.insert_handwritten(con, {'body': '独立验证题目'+str(index)+'：请说明氧气的用途。', 'qtype': '简答题'})
+        assert not err
+    con.execute('UPDATE questions SET answer=? WHERE id=2', ('已有正确答案',)); con.commit(); con.close()
+    status, raw = service('/api/answers/bank-generate', {'confirmation': '我同意', 'ids': [1], 'limit': 1, 'q': '不存在的筛选'})
+    result = json.loads(raw)
+    assert status == 200 and result['total'] == 55 and result['queued'] == 54 and result['skipped'] == 1
+    con = b.open_db()
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 54
+    assert con.execute('SELECT answer FROM questions WHERE id=2').fetchone()[0] == '已有正确答案'
+    con.close()

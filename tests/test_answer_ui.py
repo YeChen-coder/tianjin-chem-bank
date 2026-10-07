@@ -28,16 +28,18 @@ def run_node(code):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_bulk_hidden_in_bank_even_when_a_previous_paper_is_remembered():
+def test_paper_bulk_hidden_in_bank_and_separate_confirmed_bank_button_visible():
     source = function('answerPaperId') + '\n' + function('syncAiCompose')
     run_node('const source = ' + json.dumps(source) + r''';
 const assert = require('node:assert/strict');
 const apply = new Function('document', 'currentPaperId', 'paperFilter', source + '\nsyncAiCompose();');
 for (const [current, filter, visible] of [[null,null,false], [77,null,false], [77,{id:88},true]]) {
-  const elements = Object.fromEntries(['ai-compose','ai-answers','ai-intensity-wrap','answer-msg'].map(id => [id, {}]));
+  const elements = Object.fromEntries(['ai-compose','ai-answers','ai-intensity-wrap','answer-msg','ai-bank-answers','bank-answer-msg'].map(id => [id, {}]));
   apply({getElementById: id => elements[id]}, current, filter);
   assert.equal(elements['ai-answers'].hidden, !visible);
   assert.equal(elements['answer-msg'].hidden, !visible);
+  assert.equal(elements['ai-bank-answers'].hidden, visible);
+  assert.equal(elements['bank-answer-msg'].hidden, visible);
 }
 ''')
 
@@ -237,5 +239,57 @@ const bind=new Function('fetch','document','list',`
   ui.setPaper({id:22,ids:[2]});await ui.load();
   release({json:async()=>({items:[{id:1}],total:1,stats_line:'旧甲卷'})});await first;
   assert.deepEqual(list.children,[{id:2}]);assert.equal(elements.stats.textContent,'乙卷');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
+
+def test_bank_modal_cancellation_wrong_text_and_reopening_never_start_tasks():
+    source = function('mountBankAnswerConfirmation')
+    run_node('const source = ' + json.dumps(source) + r''';
+const assert=require('node:assert/strict');
+const elements=Object.fromEntries(['ai-bank-answers','bank-answer-confirm','bank-answer-agreement','bank-answer-start','bank-answer-msg','bank-answer-cancel','bank-answer-form'].map(id=>[id,{}]));
+const dialog=elements['bank-answer-confirm'],input=elements['bank-answer-agreement'],start=elements['bank-answer-start'];
+dialog.showModal=()=>{dialog.open=true;};dialog.close=()=>{dialog.open=false;};input.focus=()=>{};
+const requests=[];
+const fetch=async(url,options)=>{requests.push([url,JSON.parse(options.body)]);return {ok:true,json:async()=>({queued:2,already_running:0,skipped:1})};};
+const bind=new Function('document','fetch',`let bankAnswerSubmitting=false;
+function answerPaperId(){return null;}function answerStartPoll(){}async function answerRefresh(){}
+${source}\nmountBankAnswerConfirmation();`);
+bind({getElementById:id=>elements[id]},fetch);
+(async()=>{
+  const event={preventDefault(){}};
+  elements['ai-bank-answers'].onclick();
+  assert.equal(dialog.open,true);assert.equal(start.disabled,true);assert.equal(requests.length,0);
+  for(const value of ['', '同意', '我同意 ', '我同意但不开始']) {
+    input.value=value;input.oninput();assert.equal(start.disabled,true);
+    await elements['bank-answer-form'].onsubmit(event);assert.equal(requests.length,0);
+  }
+  input.value='我同意';input.oninput();assert.equal(start.disabled,false);
+  elements['bank-answer-cancel'].onclick();
+  await elements['bank-answer-form'].onsubmit(event);assert.equal(requests.length,0);
+  elements['ai-bank-answers'].onclick();assert.equal(input.value,'');assert.equal(start.disabled,true);
+  input.value='我同意';input.oninput();await elements['bank-answer-form'].onsubmit(event);
+  assert.deepEqual(requests,[['/api/answers/bank-generate',{confirmation:'我同意'}]]);
+  assert.equal(dialog.open,false);
+  await elements['bank-answer-form'].onsubmit(event);assert.equal(requests.length,1);
+  elements['ai-bank-answers'].onclick();assert.equal(input.value,'');assert.equal(start.disabled,true);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+''')
+
+
+def test_bank_progress_keeps_button_disabled_until_finished_or_stopped():
+    source = function('bankAnswerRefresh')
+    run_node('const source = ' + json.dumps(source) + r''';
+const assert=require('node:assert/strict');
+const elements={'ai-bank-answers':{},'bank-answer-msg':{}};
+let current={batch:{active:50,done:1,skipped:10,cancelled:0,failed:0}};
+const bind=new Function('document','fetch',`let bankAnswerSubmitting=false;${source}\nreturn bankAnswerRefresh;`);
+const refresh=bind({getElementById:id=>elements[id]},async()=>({ok:true,json:async()=>current}));
+(async()=>{
+  assert.equal(await refresh(),true);assert.equal(elements['ai-bank-answers'].disabled,true);
+  assert.ok(elements['bank-answer-msg'].textContent.includes('50'));
+  current={batch:{active:0,done:1,skipped:10,cancelled:50,failed:0}};
+  assert.equal(await refresh(),false);assert.equal(elements['ai-bank-answers'].disabled,false);
+  assert.ok(elements['bank-answer-msg'].textContent.includes('叫停'));
 })().catch(error=>{console.error(error);process.exitCode=1;});
 ''')
