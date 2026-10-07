@@ -2147,7 +2147,7 @@ function aiUpsertBox(art, base) {
   const progress = box.querySelector('.aiprogress');
   if (progress) {
     progress.hidden = !state;
-    const explanation = state ? state.detail + ' 一道新题通常要先读懂原题、再改写、最后检查。带图题有时需要一分钟或更久。页面会自动更新，无需重复点击。' : '';
+    const explanation = state ? state.detail + ' ' + (base.active_job.service_message || '') + ' 一道新题通常要先读懂原题、再改写、最后检查。带图题有时需要一分钟或更久。页面会自动更新，无需重复点击。' : '';
     if (progress.textContent !== explanation) progress.textContent = explanation;
   }
   const prof = box.querySelector('.aiprof');

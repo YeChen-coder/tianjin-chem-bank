@@ -2,14 +2,15 @@
 """AI variants for questions already on a paper.
 
 Environment (names only; values are read when the worker starts, never stored):
-  GLM_API_KEY        preferred provider. If set, every profile, generate, and judge
-                     call tries Zhipu GLM first. Never write it to the DB, UI, or logs.
+  GLM_API_KEY        preferred provider. Quota exhaustion pauses GLM for 10 minutes
+                     while DeepSeek continues. Never write keys to DB, UI, or logs.
   GLM_FLASH          default glm-5.3-flash (vision / first generation / vision judge).
                      thinking.type only supports enabled. Temperature 1, top_p 0.95.
   GLM_PRO            default glm-5.3 (text flagship). Never send images to it.
   GLM_API_URL        default https://open.bigmodel.cn/api/paas/v4/chat/completions
   GLM_REASONING_EFFORT default high (low / high / max on GLM-5.3).
   GLM_MAX_TOKENS     default 8192; includes the model's reasoning budget.
+  DEEPSEEK_MAX_TOKENS default 8192; non-thinking mode retained on format retry.
   DEEPSEEK_API_KEY   fallback. Used once when GLM is unset or that call fails.
                      Do not write it to the DB, UI, or logs.
   DEEPSEEK_FLASH     default deepseek-flash
@@ -19,12 +20,12 @@ Environment (names only; values are read when the worker starts, never stored):
                      deepseek-chat / deepseek-reasoner were retired after 2026-07-24
                      and must not be the default.)
   DEEPSEEK_PRO       default deepseek-v4-pro
-                     (vision is NOT supported. Pro calls are text-only and use image_json.
-                     A judge that still needs the original picture uses the flash model.)
+                     (text-only role for later text variants and text judging.
+                     Every picture-dependent variant and judge uses the flash role.)
 
 GLM is non-streaming with a hard deadline around 90s. A body that is only
 keep-alives is a failed call. DeepSeek remains the fallback and is not removed.
-Prompt version stored on each ai_versions row: chem-g9-v1
+Prompt version stored on each ai_versions row: chem-g9-v2-answers
 """
 import base64
 import hashlib
@@ -44,7 +45,7 @@ import uuid
 import banklib
 import question_analysis
 
-PROMPT_VERSION = "chem-g9-v1"
+PROMPT_VERSION = "chem-g9-v2-answers"
 API_URL = "https://api.deepseek.com/chat/completions"
 GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 INTENSITIES = ("light", "medium", "deep")
@@ -82,6 +83,10 @@ _ds_flash = "deepseek-flash"
 _ds_pro = "deepseek-v4-pro"
 _CALL_TIMEOUT = 90
 _KEEPALIVE_LIMIT = 60
+_provider_lock = threading.Lock()
+_glm_pause_until = 0.0
+_glm_pause_key = ''
+_GLM_QUOTA_CODES = {'1113', '1308', '1309', '1310', '1314', '1316', '1317', '1318', '1319', '1320', '1321'}
 
 SYSTEM_PROFILE = """你是天津市九年级化学教师的题目分析助手。范围是人民教育出版社《义务教育教科书 化学》九年级上册、下册的常规教学内容。不要使用大学化学，也不要超纲。
 请阅读母题（含必须看的图），只输出一个 JSON 对象，不要 Markdown，不要额外解释。
@@ -121,6 +126,11 @@ SYSTEM_GENERATOR = """你是天津市九年级化学教师的出题助手。范�
 7. 单选题只能有一个正确选项；多选题的正确项要明确；选项不能重复，也不能互相包含导致多解。
 8. 不要生成新图片。如果新题仍依赖原来的图，depends_on_image 为 true，并在 segments 里原样引用给定的 /media 图片；不要编造新的 src。
 9. 只输出一个 JSON 对象，不要 Markdown，不要解释。
+10. 必须返回非空且完整的新答案，不能写“略”“待补充”或让老师自行计算。按母题画像保留题型。单选给出唯一正确选项字母；多选给出完整正确选项集合；填空逐空作答；简答和实验逐小问作答；计算给出结果、单位，并在 analysis 写出方程式或计算步骤。
+11. 答案和解析只能写入 answer、analysis，不得在 stem、segments 的题干中附上答案、解析或标出正确选项。
+12. 输出前重新独立解答新题，逐一核对 answer 与 analysis 的结论一致。改动选项表述后，多选的正确项集合也必须重新计算，不能保留旧选项字母。选择题每个选项单独一段，并明确编号 A、B、C、D。
+13. 图像事实以实际原图为准，不得给装置凭空加入试剂、液体或反应。设问中的装置字母必须与对应操作或反应一致；制气反应应问发生装置，不能移到只有蜡烛的收集瓶。
+14. 题型格式也必须保持：多选题在题干明确写“多选”；填空题逐空设问；简答题用“说明、解释、列举、判断并给出理由”等问句让学生完整作答，不能把所有小问都改成填空；计算题要保留数值计算，并在题干提供所需相对原子质量等数据，不能依赖未随题导出的原试卷卷头。
 字段：
 stem（题干，选择题把选项写进题干）,
 answer（新答案）,
@@ -146,7 +156,9 @@ grade_level_appropriate（布尔，超纲则为 false）,
 image_consistent（布尔，不用图或图与题一致则为 true）,
 issues（数组，元素为 {"type":"","message":""}）,
 recommendation（给老师的短说明，不要改写全题）。
-PASS 表示自动检查未发现科学错误、条件充分、答案正确且难度大致合适。SUSPECT 表示大体可用但有需要老师看的疑点。FAIL 表示科学错误、条件不足、答案错误、多解或明显超纲。"""
+PASS 表示自动检查未发现科学错误、条件充分、答案正确且难度大致合适。SUSPECT 表示大体可用但有需要老师看的疑点。FAIL 表示科学错误、条件不足、答案错误、多解或明显超纲。
+看图时以实际原图为准，不得给装置补设未出现的试剂或液体。图像描述只是辅助，不是事实保证；只有蜡烛的瓶不能推断含澄清石灰水。
+核对题型与作答方式是否一致：简答题不能把全部小问改成填空。明显偏离指定题型时判 SUSPECT。"""
 
 INTENSITY_TEXT = {
     "light": "轻：只改数字、物质的具体用量或设问角度，情景和考点保持不变。",
@@ -156,11 +168,14 @@ INTENSITY_TEXT = {
 
 
 class ModelError(Exception):
-    def __init__(self, kind, message=None):
+    def __init__(self, kind, message=None, http_status=None, provider_code=None):
         self.kind = kind
+        self.http_status = http_status
+        self.provider_code = str(provider_code or '')
         messages = {"config":"AI 配置不完整", "auth":"API 密钥或模型权限不足",
                     "http":"模型请求失败", "empty":"模型未返回正文",
                     "parse":"模型未返回有效题目 JSON",
+                    "answer":"AI 已返回题目，但没有完整答案，请重新生成",
                     "output_limit":"模型输出额度耗尽，未形成完整题目 JSON；请降低推理强度或增大 GLM_MAX_TOKENS"}
         super().__init__(message or messages.get(kind, kind))
 
@@ -308,6 +323,7 @@ def _job_public(row, duplicate=False):
         "phase": row["phase"],
         "status": row["status"],
         "duplicate": bool(duplicate),
+        "service_message": '原来的 AI 服务暂时不可用，正在用备用服务继续处理。' if _ds_key and _glm_paused() else '',
     }
 
 
@@ -1557,7 +1573,8 @@ def _glm_chat(model, system, user_text, image_paths=None):
     message = error.get("message") if isinstance(error, dict) else ""
     code = error.get("code") if isinstance(error, dict) else ""
     raise ModelError("http", "GLM 请求失败（HTTP %s%s）%s" %
-                     (status, "，代码 " + str(code) if code else "", "：" + _safe_text(message) if message else ""))
+                     (status, "，代码 " + str(code) if code else "", "：" + _safe_text(message) if message else ""),
+                     http_status=status, provider_code=code)
 
 
 def chat_complete(model, system, user_text, image_paths=None):
@@ -1566,13 +1583,17 @@ def chat_complete(model, system, user_text, image_paths=None):
 
 
 def _deepseek_chat(model, system, user_text, image_paths=None):
-    """Existing DeepSeek call. Flash may see images. Pro stays text-only."""
+    """DeepSeek call; complete_role strips images for text roles, not by model-name equality."""
     key = _ds_key or _api_key
     if not key:
         raise ModelError("config")
-    if model == _ds_pro or model == _pro_model:
-        image_paths = None
     content = _user_content(user_text, image_paths)
+    try:
+        budget = int(os.environ.get('DEEPSEEK_MAX_TOKENS') or 8192)
+        if not 512 <= budget <= 32768:
+            raise ValueError()
+    except ValueError:
+        raise ModelError('config', 'DEEPSEEK_MAX_TOKENS 必须是 512 至 32768 的整数')
     base = {
         "model": model,
         "messages": [
@@ -1580,7 +1601,9 @@ def _deepseek_chat(model, system, user_text, image_paths=None):
             {"role": "user", "content": content},
         ],
         "temperature": 0.3,
-        "max_tokens": 4096,
+        "max_tokens": budget,
+        "stream": False,
+        "thinking": {"type": "disabled"},
     }
     rich = dict(base)
     rich["response_format"] = {"type": "json_object"}
@@ -1598,8 +1621,35 @@ def _deepseek_chat(model, system, user_text, image_paths=None):
                 break
             if status in (401, 403):
                 raise ModelError("auth")
-            raise ModelError("http")
+            error = data.get('error', {}) if isinstance(data, dict) else {}
+            message = error.get('message') if isinstance(error, dict) else ''
+            code = error.get('code') if isinstance(error, dict) else ''
+            raise ModelError('http', 'DeepSeek 请求失败（HTTP %s%s）%s' %
+                             (status, '，代码 '+str(code) if code else '', '：'+_safe_text(message) if message else ''),
+                             http_status=status, provider_code=code)
     raise ModelError("http")
+
+
+def _glm_paused():
+    with _provider_lock:
+        return bool(_glm_key and _glm_pause_key == _glm_key and time.monotonic() < _glm_pause_until)
+
+
+def _pause_glm_if_quota(exc):
+    global _glm_pause_until, _glm_pause_key
+    if isinstance(exc, ModelError) and (exc.http_status == 402 or exc.provider_code in _GLM_QUOTA_CODES):
+        with _provider_lock:
+            _glm_pause_key = _glm_key
+            _glm_pause_until = time.monotonic() + 600
+
+
+def _validate_role_response(system, text):
+    data = parse_model_json(text)
+    if system == SYSTEM_GENERATOR:
+        answer = data.get('answer')
+        if not isinstance(answer, str) or not answer.strip() or answer.strip() in ('略', '待补充', '暂无答案', 'N/A', '-'):
+            raise ModelError('answer')
+    return data
 
 
 def complete_role(role, system, user_text, image_paths=None):
@@ -1613,24 +1663,25 @@ def complete_role(role, system, user_text, image_paths=None):
     if role != "flash":
         image_paths = None
     glm_error = None
-    if _glm_key:
+    if _glm_key and not (_ds_key and _glm_paused()):
         model = _glm_flash if role == "flash" else _glm_pro
         try:
             text = _glm_chat(model, system, user_text, image_paths)
-            parse_model_json(text)
+            _validate_role_response(system, text)
             return text, model
         except (ModelError, ValueError, json.JSONDecodeError) as exc:
             if isinstance(exc, ModelError) and exc.kind in ("config", "image"):
                 raise
             if not _ds_key:
                 raise
+            _pause_glm_if_quota(exc)
             glm_error = _safe_text(exc)
     if not _ds_key:
         raise ModelError("config")
     model = _ds_flash if role == "flash" else _ds_pro
     try:
         text = _deepseek_chat(model, system, user_text, image_paths)
-        parse_model_json(text)
+        _validate_role_response(system, text)
     except (ModelError, ValueError, json.JSONDecodeError) as exc:
         if glm_error:
             raise ModelError("http", "GLM：" + glm_error + "；备用模型：" + _safe_text(exc)) from None
@@ -1884,10 +1935,11 @@ def _ensure_profile(con, session_id, base, segments):
     return profile, image
 
 
-def _generation_user(profile, image, parent, feedback, intensity, base_imgs):
+def _generation_user(profile, image, parent, feedback, intensity, base_imgs, retry=False):
+    profile_context = {key:value for key,value in profile.items() if key != 'original_answer'}
     blocks = [question_analysis.curriculum_prompt(),
         INTENSITY_TEXT.get(intensity, INTENSITY_TEXT["medium"]),
-        "题目画像：\n" + json.dumps(profile, ensure_ascii=False),
+        "题目画像：\n" + json.dumps(profile_context, ensure_ascii=False),
     ]
     if image:
         blocks.append("图像结构（不要发明新图）：\n" + json.dumps(image, ensure_ascii=False))
@@ -1909,6 +1961,8 @@ def _generation_user(profile, image, parent, feedback, intensity, base_imgs):
         blocks.append("老师这次没有额外意见。")
     if base_imgs:
         blocks.append("可以原样引用的原图：\n" + json.dumps(base_imgs, ensure_ascii=False))
+    if retry:
+        blocks.append('上一版未通过独立检查。这次从画像重新出题，不沿用被否决的题干或答案；逐一独立解答，再核对答案与解析、原图装置、每个空和计算结果保持一致。')
     blocks.append("只输出候选题目 JSON。")
     return "\n\n".join(blocks)
 
@@ -1923,7 +1977,7 @@ def _judge_user(normalized, profile, image):
     tail = {
         "generator_answer": normalized.get("answer") or "",
         "generator_analysis": normalized.get("analysis") or "",
-        "profile": profile,
+        "profile": {key:value for key,value in profile.items() if key != 'original_answer'},
     }
     if image:
         tail["image"] = image
@@ -2025,7 +2079,8 @@ def _process(con, job_id):
         return
     if _should_stop(con, job_id, ver["id"], epoch):
         return
-    role = "flash" if int(ver["seq"] or 1) == 1 else "pro"
+    need_image = _has_image(base, segments)
+    role = "flash" if need_image or int(ver["seq"] or 1) == 1 else "pro"
     _set_version(con, ver["id"], "GENERATING", None, generator_model=_preferred_model(role))
     con.execute(
         "UPDATE ai_jobs SET phase='generate' WHERE id=? AND status!='cancelled'",
@@ -2035,11 +2090,11 @@ def _process(con, job_id):
     if _should_stop(con, job_id, ver["id"], epoch):
         return
     parent = _load_parent_candidate(con, ver["parent_version_id"])
-    need_image = _has_image(base, segments)
     paths = _image_paths(segments) if (role == "flash" and need_image) else None
     user = _generation_user(
         profile, image, parent, ver["teacher_feedback"] or "", ver["intensity"] or "medium",
         collect_imgs(segments) if need_image else [],
+        retry=chain_bad_count(con, base['id'], ver['parent_version_id']) > 0,
     )
     try:
         text, model = complete_role(role, SYSTEM_GENERATOR, user, paths)
