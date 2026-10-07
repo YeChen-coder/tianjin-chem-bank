@@ -258,14 +258,26 @@ def enqueue(con, paper_id, question_id=None, retry=False):
     _rows(con)
     if os.environ.get('CHEM_DISABLE_AI') == '1':
         return None, '隔离开发预览已停用 AI'
-    paper = banklib.get_paper(con, paper_id)
-    if not paper:
-        return None, '试卷不存在'
-    ids = paper['ids']
-    if question_id is not None:
-        if question_id not in ids:
-            return None, '这道题不在当前试卷中'
+    if question_id is not None and (not isinstance(question_id, int) or isinstance(question_id, bool) or question_id <= 0):
+        return None, '请指定一道题目'
+    if paper_id is None:
+        # Bank view supports exactly one visible question, never a bank-wide job.
+        if question_id is None:
+            return None, '批量补答案必须指定一套试卷'
+        visible = con.execute('SELECT 1 FROM questions WHERE id=? AND ' + banklib.questions_visible_clause(),
+                              (question_id,)).fetchone()
+        if not visible:
+            return None, '题目不存在或尚未收入题库'
         ids = [question_id]
+    else:
+        paper = banklib.get_paper(con, paper_id)
+        if not paper:
+            return None, '试卷不存在'
+        ids = paper['ids']
+        if question_id is not None:
+            if question_id not in ids:
+                return None, '这道题不在当前试卷中'
+            ids = [question_id]
     jobs, skipped = [], 0
     con.execute('BEGIN IMMEDIATE')
     try:

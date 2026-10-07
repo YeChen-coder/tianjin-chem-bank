@@ -543,3 +543,75 @@ def test_choice_annotation_is_allowed_but_ambiguous_choices_are_not():
     assert aa._choice_set('B or C') is None
     assert aa._equation_issue('2KMnO₄→K₂MnO₄+MnO₂↑+O₂↑')
     assert not aa._equation_issue('2KMnO₄→K₂MnO₄+MnO₂+O₂↑')
+
+
+def test_bank_single_answer_without_any_paper_only_saves_that_question(bank, monkeypatch):
+    con, _ = bank
+    con.execute('DELETE FROM paper_items'); con.execute('DELETE FROM papers'); con.commit()
+    calls = responses(monkeypatch, disagree=False)
+    first, err = aa.enqueue(con, None, 1, retry=True)
+    assert not err and len(first['jobs']) == 1
+    again, err = aa.enqueue(con, None, 1, retry=True)
+    assert not err and again['jobs'][0]['duplicate']
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 1
+    job = con.execute('SELECT * FROM answer_jobs').fetchone()
+    assert job['question_id'] == 1 and job['paper_id'] is None
+    jid = aa._claim(con); aa.run_job(con, jid)
+    assert len(calls) == 5 and aa.state(con, 1)['has_answer']
+    assert not aa.state(con, 2)['has_answer']
+    assert con.execute('SELECT COUNT(*) FROM papers').fetchone()[0] == 0
+
+
+def test_bank_has_no_bulk_fallback_and_rejects_multiple_question_ids(bank):
+    con, _ = bank
+    for qid in (None, [1, 2], '1,2', True):
+        result, err = aa.enqueue(con, None, qid)
+        assert result is None and err
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 0
+
+
+def test_bank_single_answer_rejects_hidden_draft_and_missing_question(bank):
+    con, _ = bank
+    con.execute('UPDATE questions SET in_bank=0 WHERE id=2'); con.commit()
+    for qid in (2, 99999):
+        result, err = aa.enqueue(con, None, qid)
+        assert result is None and '题目不存在' in err
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 0
+
+
+def test_bank_single_answer_preserves_existing_answer(bank):
+    con, _ = bank
+    con.execute('UPDATE questions SET answer=? WHERE id=1', ('教师已保存的答案',)); con.commit()
+    result, err = aa.enqueue(con, None, 1, retry=True)
+    assert not err and result == {'jobs': [], 'skipped': 1}
+    assert aa.state(con, 1)['answer'] == '教师已保存的答案'
+
+
+def test_api_bank_single_button_request_never_fans_out(service, monkeypatch):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    status, raw = service('/api/questions/1/ai-answer', {'question_ids': [1, 2], 'ids': [1, 2]})
+    first = json.loads(raw)
+    assert status == 200 and len(first['jobs']) == 1 and first['jobs'][0]['question_id'] == 1
+    status, raw = service('/api/questions/1/ai-answer', {})
+    assert status == 200 and json.loads(raw)['jobs'][0]['duplicate']
+    con = b.open_db()
+    jobs = con.execute('SELECT question_id,paper_id FROM answer_jobs').fetchall()
+    assert [tuple(job) for job in jobs] == [(1, None)]
+    assert con.execute('SELECT COUNT(*) FROM papers').fetchone()[0] == 0
+    con.close()
+
+
+def test_api_bank_single_ai_disabled_and_no_bank_bulk_endpoint(service):
+    status, raw = service('/api/questions/1/ai-answer', {})
+    assert status == 400 and '停用' in json.loads(raw)['error']
+    assert service('/api/ai-answers', {'ids': [1, 2]})[0] != 200
+    con = b.open_db()
+    assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 0
+    con.close()
+
+
+def test_explicit_paper_single_request_still_requires_membership(service, monkeypatch):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    pid = json.loads(service('/api/papers', {'name': '只含第二题', 'ids': [2]})[1])['id']
+    status, raw = service('/api/questions/1/ai-answer', {'paper_id': pid})
+    assert status == 400 and '不在当前试卷' in json.loads(raw)['error']

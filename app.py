@@ -99,6 +99,7 @@ PAGE = r"""<!DOCTYPE html>
   .answer-panel textarea { display: block; width: 100%; box-sizing: border-box; min-height: 72px; margin: 6px 0; font: inherit; line-height: 1.6; }
   .answer-panel .answer-note { color: #626b73; margin: 6px 0; white-space: pre-wrap; }
   .answer-panel .answer-error { color: #a33; }
+  .answer-actions:not(:empty) { margin-top: 8px; }
   .answer-candidate { white-space: pre-wrap; padding: 6px 0; border-bottom: 1px dashed #ddd; }
   #answer-msg { font-size: 13px; color: #485865; }
   .pager { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
@@ -1288,7 +1289,9 @@ function syncAiCompose() {
   const on = !!(currentPaperId || (paperFilter && paperFilter.id));
   btn.hidden = !on;
   const answers = document.getElementById('ai-answers');
-  if (answers) answers.hidden = !on;
+  if (answers) answers.hidden = !answerPaperId();
+  const answerMessage = document.getElementById('answer-msg');
+  if (answerMessage) answerMessage.hidden = !answerPaperId();
   const wrap = document.getElementById('ai-intensity-wrap');
   if (wrap) wrap.hidden = !on;
 }
@@ -1368,7 +1371,7 @@ async function loadPapers() {
     b.type = 'button';
     b.className = 'secondary paper' + (p.id === currentPaperId ? ' on' : '');
     b.textContent = (p.name || '未命名试卷') + '（' + (p.count || 0) + '题）';
-    b.title = '单击打开继续编辑；双击只看这套题目';
+    b.title = '单击打开继续编辑；双击只看这套题目，可批量补答案';
     b.addEventListener('click', () => {
       if (paperClickTimer) {
         clearTimeout(paperClickTimer);
@@ -1759,6 +1762,10 @@ function aiIntensitySelect(value) {
 }
 function aiPaperId() {
   return (paperFilter && paperFilter.id) || currentPaperId || null;
+}
+function answerPaperId() {
+  // Only a view showing one paper may expose a bulk answer action.
+  return (paperFilter && paperFilter.id) || null;
 }
 function aiApplyPaper(paper) {
   if (!paper || !paper.ids) return;
@@ -2314,6 +2321,9 @@ function mountAnswerPanel(holder, item) {
   const contents = document.createElement('div');
   panel.append(summary, jobLine, contents);
   holder.append(panel);
+  const actions = document.createElement('div');
+  actions.className = 'answer-actions';
+  holder.append(actions);
   let state = item.answer_state || {question_id: item.id, answer: item.answer || '', parts: [], revision: ''};
   let saveQueue = Promise.resolve();
   let outstanding = 0;
@@ -2417,7 +2427,7 @@ function mountAnswerPanel(holder, item) {
     editors.push(editor); contents.append(box);
   }
   function render() {
-    contents.textContent = ''; editors = [];
+    contents.textContent = ''; actions.textContent = ''; editors = []; retryButton = null;
     updateSummary();
     if (state.parts.length) state.parts.forEach(addEditor);
     else {
@@ -2435,24 +2445,24 @@ function mountAnswerPanel(holder, item) {
       if (images.length) { const note = document.createElement('div'); note.className = 'answer-note'; note.textContent = '原答案含图片；如需改成文字答案，请在下方填写。'; contents.append(note); }
       addEditor(null);
     }
-    if (aiPaperId()) {
-      const pending = state.stale || state.parts.some(p => !['CONFIRMED', 'TEACHER'].includes(p.status));
-      if (pending || !state.has_answer) {
-        const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'secondary';
-        retryButton = retry;
-        retry.textContent = pending ? '重新核对待确认的答案' : 'AI给这道题补答案';
-        retry.disabled = !!(state.job && ['queued', 'running'].includes(state.job.status));
-        retry.onclick = async () => {
-          if (outstanding || editors.some(e => e.input.value !== e.saved || e.failed)) { jobLine.textContent = '请等输入保存完成，再重新核对'; return; }
-          retry.disabled = true;
-          try {
-            const r = await fetch('/api/questions/' + item.id + '/ai-answer', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({paper_id: aiPaperId()})});
-            const data = await r.json(); if (!r.ok) throw new Error(data.error || '没有开始作答');
-            answerStartPoll(); await answerRefresh();
-          } catch (e) { jobLine.textContent = e.message; retry.disabled = false; }
-        };
-        contents.append(retry);
-      }
+    const pending = state.stale || state.parts.some(p => !['CONFIRMED', 'TEACHER'].includes(p.status));
+    if (pending || !state.has_answer) {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'secondary';
+      retryButton = retry;
+      retry.textContent = pending ? '重新核对待确认的答案' : 'AI生成答案';
+      retry.title = '只给这道题作答，独立核对后自动保存';
+      retry.disabled = !!(state.job && ['queued', 'running'].includes(state.job.status));
+      retry.onclick = async () => {
+        if (outstanding || editors.some(e => e.input.value !== e.saved || e.failed)) { jobLine.textContent = '请等输入保存完成，再重新核对'; return; }
+        retry.disabled = true;
+        try {
+          const paperId = answerPaperId();
+          const r = await fetch('/api/questions/' + item.id + '/ai-answer', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(paperId ? {paper_id: paperId} : {})});
+          const data = await r.json(); if (!r.ok) throw new Error(data.error || '没有开始作答');
+          answerStartPoll(); await answerRefresh();
+        } catch (e) { jobLine.textContent = e.message; retry.disabled = false; }
+      };
+      actions.append(retry);
     }
   }
   panel.answerController = {update(next) {
@@ -2471,7 +2481,7 @@ function answerStartPoll() {
 async function answerRefresh() {
   if (answerRefreshing) return;
   const panels = [...document.querySelectorAll('.answer-panel')];
-  const paper = aiPaperId();
+  const paper = answerPaperId();
   if (!paper && !panels.length) return;
   answerRefreshing = true;
   try {
@@ -2498,11 +2508,10 @@ async function answerRefresh() {
   } finally { answerRefreshing = false; }
 }
 document.getElementById('ai-answers').onclick = async () => {
-  const paperId = aiPaperId(); if (!paperId) return;
+  const paperId = answerPaperId(); if (!paperId) return;
   const btn = document.getElementById('ai-answers'), message = document.getElementById('answer-msg');
   btn.disabled = true;
   try {
-    if (!paperFilter || paperFilter.id !== paperId) await openPaper(paperId, {view: true});
     const r = await fetch('/api/papers/' + paperId + '/ai-answers', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
     const data = await r.json(); if (!r.ok) throw new Error(data.error || '没有开始作答');
     message.textContent = '已安排 ' + data.jobs.length + ' 题，跳过 ' + data.skipped + ' 题已有答案或待确认结果。答案会自动保存到题库。';
@@ -2711,8 +2720,8 @@ def _handle_answers_post(handler, path, raw):
                 result, error = aianswers.edit_answer(con, int(single[1]), data)
             else:
                 paper_id = data.get('paper_id')
-                if not isinstance(paper_id, int) or isinstance(paper_id, bool) or paper_id <= 0:
-                    result, error = None, '请先打开这道题所在的试卷'
+                if paper_id is not None and (not isinstance(paper_id, int) or isinstance(paper_id, bool) or paper_id <= 0):
+                    result, error = None, '试卷编号格式不对'
                 else:
                     result, error = aianswers.enqueue(con, paper_id, int(single[1]), retry=True)
         finally:
