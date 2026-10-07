@@ -65,6 +65,57 @@ def test_subquestions_decimal_and_section(tmp_path):
     assert '1.5g' in qs[0]['body']
 
 
+def test_export_rich_existing_answer_keeps_formula_image_and_table(tmp_path):
+    con = b.init_db()
+    qs = b.questions_from_docx(document(tmp_path, p('1．填写水的化学式，并说明实验依据。')))
+    _, _, ids = b.insert_questions(con, 'answer-fixture.docx', qs)
+    qid = ids[0]
+    image_name = 'a'*64+'.png'
+    Path(b.MEDIA).mkdir(parents=True, exist_ok=True)
+    (Path(b.MEDIA)/image_name).write_bytes(PNG)
+    formula = '<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>SO₄²⁻</m:t></m:r></m:oMath>'
+    blocks = [[{'t':'text','s':'【答案】H'}, {'t':'text','s':'2','vert':'subscript'}, {'t':'text','s':'O'},
+               {'t':'text','s':'SO₄²⁻','omml':formula}],
+              [{'t':'img','src':'/media/'+image_name,'sha':'a'*64}],
+              {'t':'table','rows':[[[{'t':'text','s':'原有解析表格'}],[{'t':'text','s':'正确现象'}]]]}]
+    answer = '\n'.join(b.item_plain(block) for block in blocks).strip()
+    metadata = json.loads(con.execute('SELECT payload FROM question_metadata WHERE question_id=?', (qid,)).fetchone()[0])
+    metadata['answer_segments'] = blocks
+    con.execute('UPDATE question_metadata SET payload=? WHERE question_id=?', (json.dumps(metadata), qid))
+    con.execute('UPDATE questions SET answer=? WHERE id=?', (answer, qid))
+    con.commit(); con.close()
+    for include in (False, True):
+        out = tmp_path/('answers.docx' if include else 'questions-only.docx')
+        b.export_docx(ids, str(out), keep_answers=include)
+        with zipfile.ZipFile(out) as archive:
+            xml = archive.read('word/document.xml')
+            root = ET.fromstring(xml)
+            images = [name for name in archive.namelist() if name.startswith('word/media/')]
+            assert bool(images) == include
+            if include:
+                assert archive.read(images[0]) == PNG
+        assert (root.find('.//'+b.M+'oMath') is not None) == include
+        assert (root.find('.//'+b.W+'tbl') is not None) == include
+        assert ('【答案】'.encode('utf-8') in xml) == include
+        if include:
+            assert any(node.get(b.W+'val') == 'subscript' for node in root.findall('.//'+b.W+'vertAlign'))
+    con = b.open_db()
+    assert con.execute('SELECT answer FROM questions WHERE id=?', (qid,)).fetchone()[0] == answer
+    con.close()
+
+
+def test_export_uses_current_answer_instead_of_stale_imported_answer(tmp_path):
+    qs = b.questions_from_docx(document(tmp_path, p('1．说明水的组成及实验依据。') + p('【答案】旧答案内容')))
+    con = b.init_db(); _, _, ids = b.insert_questions(con, 'old.docx', qs)
+    con.execute('UPDATE questions SET answer=? WHERE id=?', ('教师保存的新答案', ids[0]))
+    con.commit(); con.close()
+    out = tmp_path/'updated.docx'
+    b.export_docx(ids, str(out), keep_answers=True)
+    with zipfile.ZipFile(out) as archive:
+        xml = archive.read('word/document.xml').decode('utf-8')
+    assert '教师保存的新答案' in xml and '旧答案内容' not in xml
+
+
 def test_separate_answers(tmp_path):
     qs = b.questions_from_docx(document(tmp_path, p('1．说明水的组成及依据。') + p('2．说明氧气的制取方法。') + p('参考答案') + p('1．氢元素和氧元素。') + p('2．用过氧化氢制取。')))
     assert len(qs) == 2

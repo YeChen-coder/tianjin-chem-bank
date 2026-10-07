@@ -97,3 +97,31 @@ def test_chinese_upload_filename_and_source_export(service,tmp_path):
     assert status == 200
     with zipfile.ZipFile(BytesIO(raw)) as archive:
         assert name in archive.read('word/document.xml').decode('utf-8')
+
+
+def test_export_existing_answers_is_opt_in_and_attached_to_each_question(service):
+    from xml.etree import ElementTree as ET
+    con = b.open_db()
+    con.execute('UPDATE questions SET answer=? WHERE id=1', ('守恒验证答案\n原有解析第二行',))
+    con.execute('UPDATE questions SET answer=? WHERE id=2', ('  ',))
+    con.commit(); con.close()
+    for flag in (None, False, True):
+        payload = {'ids': [1, 2], 'keep_source': True}
+        if flag is not None:
+            payload['keep_answers'] = flag
+        status, raw = service('/api/export', payload)
+        assert status == 200
+        with zipfile.ZipFile(BytesIO(raw)) as archive:
+            root = ET.fromstring(archive.read('word/document.xml'))
+        paragraphs = [''.join(p.itertext()) for p in root.findall('.//' + b.W + 'body/' + b.W + 'p')]
+        text = '\n'.join(paragraphs)
+        if flag:
+            answer_index = next(i for i, p in enumerate(paragraphs) if '守恒验证答案' in p)
+            next_question = next(i for i, p in enumerate(paragraphs) if '2. ' in p)
+            assert answer_index < next_question
+            assert '原有解析第二行' in paragraphs[answer_index + 1]
+            assert text.count('答案：') == 1
+            assert '文件来源：' in paragraphs[answer_index + 2]
+        else:
+            assert '守恒验证答案' not in text and '答案：' not in text
+    assert service('/api/export', {'ids': [1], 'keep_answers': 'false'})[0] == 400

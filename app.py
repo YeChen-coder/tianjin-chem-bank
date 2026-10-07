@@ -155,6 +155,7 @@ PAGE = r"""<!DOCTYPE html>
   <span id="paperhint"></span>
   <label class="keep"><input id="keepsrc" type="checkbox"/> 导出时保留来源</label>
   <label class="keep"><input id="autonum" type="checkbox" checked/> 导出时自动编号</label>
+  <label class="keep" title="默认不带答案；勾选后只附上题库已有的答案，没有答案的题保持原样"><input id="keepanswers" type="checkbox"/> 导出时附带已有答案（默认不带）</label>
   <label class="btn secondary" style="display:inline-block">通过 Word 文档导入题目
     <input id="file" type="file" accept=".doc,.docx" style="display:none"/>
   </label>
@@ -1236,7 +1237,7 @@ document.getElementById('export').onclick = async () => {
   const r = await fetch('/api/export', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ids: [...picked], keep_source: document.getElementById('keepsrc').checked, auto_number: document.getElementById('autonum').checked})
+    body: JSON.stringify({ids: [...picked], keep_source: document.getElementById('keepsrc').checked, auto_number: document.getElementById('autonum').checked, keep_answers: document.getElementById('keepanswers').checked})
   });
   if (!r.ok) { const error = await r.json().catch(() => ({})); alert(error.error || '导出失败'); return; }
   const blob = await r.blob();
@@ -1538,7 +1539,7 @@ document.getElementById('exportpaper').onclick = async () => {
   const r = await fetch('/api/export', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ids: ids, keep_source: document.getElementById('keepsrc').checked, auto_number: document.getElementById('autonum').checked})
+    body: JSON.stringify({ids: ids, keep_source: document.getElementById('keepsrc').checked, auto_number: document.getElementById('autonum').checked, keep_answers: document.getElementById('keepanswers').checked})
   });
   if (!r.ok) { const error = await r.json().catch(() => ({})); alert(error.error || '导出失败'); return; }
   const blob = await r.blob();
@@ -2930,6 +2931,9 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 keep_source = bool(payload.get("keep_source"))
                 auto_number = True if "auto_number" not in payload else bool(payload.get("auto_number"))
+                keep_answers = payload.get("keep_answers", False)
+                if not isinstance(keep_answers, bool):
+                    raise ValueError('keep_answers must be boolean')
             except Exception:
                 self._send(400, json.dumps({"error": "bad request"}), "application/json")
                 return
@@ -2939,7 +2943,7 @@ class Handler(BaseHTTPRequestHandler):
             dest = os.path.join(banklib.DATA_DIR, "last-export.docx")
             try:
                 with LOCK:
-                    n = banklib.export_docx(ids, dest, keep_source=keep_source, auto_number=auto_number)
+                    n = banklib.export_docx(ids, dest, keep_source=keep_source, auto_number=auto_number, keep_answers=keep_answers)
                     with open(dest, "rb") as f:
                         data = f.read()
             except RuntimeError as exc:

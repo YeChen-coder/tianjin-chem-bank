@@ -3071,7 +3071,7 @@ def source_details(con, qid):
     return [document_display.source_info(a, b, (DATA_DIR, ROOT, MIRROR)) for a, b in rows]
 
 
-def export_docx(question_ids, dest, keep_source=False, auto_number=True):
+def export_docx(question_ids, dest, keep_source=False, auto_number=True, keep_answers=False):
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor, Cm
     from docx.oxml.ns import qn
@@ -3157,6 +3157,52 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True):
                     con.close()
                     raise RuntimeError("题目图片缺失，已停止导出：" + fn)
 
+    def write_table(rows):
+        cols = max((len(r) for r in rows), default=0)
+        if cols < 1:
+            return
+        table = doc.add_table(rows=len(rows), cols=cols)
+        table.style = 'Table Grid'
+        table.autofit = True
+        for ri, row_cells in enumerate(rows):
+            for ci in range(cols):
+                cell_parts = row_cells[ci] if ci < len(row_cells) else []
+                cell = table.rows[ri].cells[ci]
+                cell.text = ''
+                write_parts(cell.paragraphs[0], cell_parts)
+
+    def write_answer(row, metadata):
+        text = (row['answer'] or '').strip()
+        saved = metadata.get('answer_segments') or []
+        # The current answer is authoritative; stale imported formatting must
+        # not replace a later edit. Image-only answers also count as existing.
+        saved_text = '\n'.join(item_plain(item) for item in saved).strip()
+        if saved_text == text and any(item_nonempty(item) for item in saved):
+            blocks = saved
+        elif text:
+            blocks = [[{'t': 'text', 's': line}] for line in text.splitlines()]
+        else:
+            return
+        labelled = bool(re.match(r'^\s*(?:[【\[]?\s*(?:参考答案|答案|答[:：]))', text))
+        first_answer = True
+        for block in blocks:
+            if isinstance(block, dict) and block.get('t') == 'table':
+                if first_answer and not labelled:
+                    label = doc.add_paragraph()
+                    label.paragraph_format.keep_with_next = True
+                    font_run(label.add_run('答案：'), bold=True)
+                write_table(block.get('rows') or [])
+            elif isinstance(block, list):
+                paragraph = doc.add_paragraph()
+                paragraph.paragraph_format.space_before = Pt(4 if first_answer else 0)
+                paragraph.paragraph_format.space_after = Pt(2)
+                if first_answer and not labelled:
+                    font_run(paragraph.add_run('答案：'), bold=True)
+                write_parts(paragraph, block)
+            else:
+                continue
+            first_answer = False
+
     n = 0
     for qid in question_ids:
         row = con.execute("SELECT * FROM questions WHERE id=?", (int(qid),)).fetchone()
@@ -3184,15 +3230,7 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True):
                     r = p.add_run(f"{n}. ")
                     font_run(r)
                     first = False
-                table = doc.add_table(rows=len(rows), cols=cols)
-                table.style = "Table Grid"
-                table.autofit = True
-                for ri, row_cells in enumerate(rows):
-                    for ci in range(cols):
-                        cell_parts = row_cells[ci] if ci < len(row_cells) else []
-                        cell = table.rows[ri].cells[ci]
-                        cell.text = ""
-                        write_parts(cell.paragraphs[0], cell_parts)
+                write_table(rows)
                 continue
             if not isinstance(para, list):
                 continue
@@ -3226,6 +3264,8 @@ def export_docx(question_ids, dest, keep_source=False, auto_number=True):
             if auto_number:
                 body = f"{n}. " + re.sub(r"^\d{1,3}\s*[.．、:：]\s*", "", body, count=1)
             write_parts(p, [{"t": "text", "s": body}])
+        if keep_answers:
+            write_answer(row, metadata)
         if keep_source and sources:
             sp = doc.add_paragraph()
             sp.paragraph_format.space_before = Pt(2)
