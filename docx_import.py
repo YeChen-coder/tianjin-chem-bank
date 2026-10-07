@@ -141,6 +141,9 @@ def parse_docx(path):
         text = b.para_text(parts)
         if not b.nonempty(parts):
             return
+        if b.is_exam_notice(text):
+            flush()
+            return
         if ANSWER_SECTION.match(text.strip()):
             flush()
             answer_mode, answer_target = True, None

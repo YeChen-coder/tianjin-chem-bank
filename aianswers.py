@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 import banklib
 import aivariant as ai
 
-PROMPT_VERSION = 'chem-answer-v2'
+PROMPT_VERSION = 'chem-answer-v3'
 PHASES = {'queued': '正在等待开始', 'plan': '正在读题、区分小问',
           'solve1': '正在第一次作答', 'solve2': '正在独立作答（第二次）',
           'solve3': '正在独立作答（第三次）', 'judge': '正在逐小问核对答案',
@@ -36,6 +36,7 @@ SOLVE = '''你是天津九年级化学教师，独立解答原题，不改题，
 逐一核对给定作答位置是否覆盖原题的每个空和小问。若漏列，请在 missing_parts 列出漏掉的原编号和设问。
 对每一项给出完整答案和简短的可检查依据。计算给结果、单位和计算过程；方程式给配平与必要条件；多选给完整字母集合。
 不得臆造原图未出现的试剂、液体、刻度或条件。图看不清、条件不足、答案无法确定时要明确标记，不能猜。
+涉及未知组成或未知系数的化学方程式时，必须把未知物自身的原子也计入守恒，不能无依据假定它不含氧等元素。计算使用九年级的质量守恒与比例方法，不使用物质的量、摩尔等超纲方法。
 如果题干前后矛盾（例如文字指定的装置与连接顺序中的装置不同），不能擅自按自己认为正确的题干作答。只对受到矛盾影响的作答位置标 conditions_sufficient=false，并保留有条件的可能答案和说明。
 只输出 JSON：{"coverage_complete":true,"missing_parts":[],"parts":[{"id":"p1","answer":"","reason":"简短依据（不是长篇思考过程）","conditions_sufficient":true,"image_clear":true}]}。
 missing_parts 元素格式 {"label":"（2）第2空","prompt":"漏列的设问"}。每个给定 id 恰好出现一次。answer 不能是略、待补充。
@@ -45,6 +46,7 @@ JUDGE = '''你是天津九年级化学独立核对教师。现有三次互不参
 不能以多数票将不同的实质答案变成已确认答案。仅有分歧的小问存疑，不得把其他已一致且正确的小问一并判存疑。题目条件不足、图看不清、漏列小问也需指出。
 逐条核对每次的 answer 和 reason 中的所有科学表述：最终选项正确但解析夹着错误、用途归类错误、物态变化或实验现象写错，仍不得通过。逐一填写 candidate_checks，不能漏掉任何一次或默认它正确。
 核对原题全部条件是否自洽，包含文字与图示、题干指定装置与连接顺序。如果矛盾，只标记受影响的小问，不得擅自“修正原题”后判通过。
+含未知物或未知系数时，逐次检验答案和解析的原子数守恒；不能漏计未知反应物中的原子，不能把某个特定取值下的结论当成全部情况成立。最终选项相同但推导或化学式写错的那一次，candidate_checks.correct 必须为 false。正式解析采用九年级的质量守恒与比例方法。
 只输出 JSON：{"coverage_complete":true,"missing_parts":[],"parts":[{"id":"p1","equivalent":true,"verified":true,"answer":"经过核对的完整答案","explanation":"经过核对的简要解析","candidate_checks":[{"attempt":1,"correct":true},{"attempt":2,"correct":true},{"attempt":3,"correct":true}],"reason":"逐项验证的简短结论"}]}。
 missing_parts 元素为 {"label":"","prompt":""}。每个给定 id 恰好出现一次。equivalent、verified、coverage_complete 必须是布尔。'''
 
@@ -405,6 +407,20 @@ def _bool(value, name):
     return value[name]
 
 
+def _plan_parts(value):
+    """Reject unusable outlines before the provider fallback finishes."""
+    parts = _parts(value)
+    labels = set()
+    for part in parts:
+        for key in ('label', 'prompt'):
+            if not isinstance(part.get(key), str) or not part[key].strip() or len(part[key]) > 4000:
+                raise ValueError('AI 没有清楚列出各小问')
+        if part['label'] in labels:
+            raise ValueError('AI 返回的小问名称重复')
+        labels.add(part['label'])
+    return parts
+
+
 def _missing(value):
     complete = _bool(value, 'coverage_complete')
     missing = value.get('missing_parts')
@@ -448,8 +464,23 @@ def _refine_plan(parts, qtype, body=''):
     return [dict(p, id='p' + str(index)) for index, p in enumerate(refined, 1)]
 
 
-def _judge_has_doubt(reason):
-    cleaned = re.sub(r'(?:没有|未发现|未见|不存在|无)(?:科学性?|明显|实质|计算)?(?:错误|矛盾|分歧|疑点|问题)|无误', '', reason)
+def _judge_has_doubt(reason, qtype='', body='', selected=None):
+    doubt = r'错误|矛盾|分歧|疑点|问题|漏答'
+    cleaned = re.sub(r'(?:没有|未发现|未见|不存在|无)(?:科学性?|明显|实质|计算)?(?:' + doubt + r')(?:[、或和及](?:' + doubt + r'))*|无误', '', reason)
+    if qtype in ('单选题', '多选题') and selected:
+        # Errors attributed to an unselected distractor do not contradict a
+        # correct solution. Errors in a solver's reasoning remain doubts.
+        def distractor(match):
+            letters = set(re.findall(r'[A-H]', match[1]))
+            prefix = cleaned[max(0, match.start()-20):match.start()]
+            if letters.isdisjoint(selected) and not re.search(r'第[一二三123]次|解析(?:中|里)?(?:有|存在|出现)', prefix):
+                return ''
+            return match[0]
+        cleaned = re.sub(r'(?<![选为是A-H、])([A-H](?:[、,，][A-H])*)(?:选项|项|的)?(?:错误原因|[^，。；;\n]{0,25}?操作错误|错误|不正确)', distractor, cleaned)
+        # A negative choice question asks for the incorrect option itself.
+        if re.search(r'不正确|错误|不合理', body):
+            cleaned = re.sub(r'(?:故|所以)?不正确的是\s*([A-H])',
+                             lambda m: '' if m[1] in selected else m[0], cleaned)
     return bool(re.search(r'错误|有误|不正确|矛盾|不一致|不确定|看不清|存疑|无法确定|条件不足|有分歧|漏答', cleaned))
 
 
@@ -473,7 +504,10 @@ def _arithmetic_issue(text):
         if len(expression) > 120 or len(set(re.findall(r'kg|g|mL|L|mol', expression))) > 1:
             continue
         tail = text[match.end():match.end()+8]
-        if tail.lstrip().startswith('%'):
+        # Do not treat the numeric prefix of 36/M or 4+3 as the whole RHS.
+        if re.match(r'\s*(?:%|[+\-−×*/÷:：∶]|[A-Za-z_])', tail) and not re.match(r'\s*(?:kg|g|mL|L|mol)(?![A-Za-z/])', tail):
+            continue
+        if match.start() and text[match.start()-1] in '+-−×*/÷:：∶':
             continue
         expression = re.sub(r'kg|g|mL|L|mol|\s', '', expression).replace('×', '*').replace('÷', '/').replace('−', '-')
         try:
@@ -539,15 +573,18 @@ def _equation_issue(text):
 
 def _call(system, data, images, role, independent=False):
     preferred = 'deepseek' if independent and ai._glm_key and ai._ds_key else None
+    options = {'response_validator': _plan_parts} if system == PLAN else {}
     if preferred:
-        raw, model = ai.complete_role(role, system, _json(data), images, preferred_provider=preferred)
+        raw, model = ai.complete_role(role, system, _json(data), images, preferred_provider=preferred, **options)
     else:
-        raw, model = ai.complete_role(role, system, _json(data), images)
+        raw, model = ai.complete_role(role, system, _json(data), images, **options)
     return ai.parse_model_json(raw), model
 
 
 def evaluate(snapshot, progress):
     """No shared chat history: solvers never see any other solver's answer."""
+    if banklib.is_exam_notice(snapshot['body']):
+        raise ValueError('这条记录是试卷说明或相对原子质量表，不是待作答题目；请核对原文件和导入结果')
     images = ai._image_paths(snapshot['segments'])
     role = 'flash'
     stem = {k: snapshot[k] for k in ('body', 'qtype', 'segments')}
@@ -559,15 +596,7 @@ def evaluate(snapshot, progress):
         model = 'saved-plan'
     else:
         plan, model = _call(PLAN, stem, images, role)
-    planned = _parts(plan)
-    labels = set()
-    for part in planned:
-        for key in ('label', 'prompt'):
-            if not isinstance(part.get(key), str) or not part[key].strip() or len(part[key]) > 4000:
-                raise ValueError('AI 没有清楚列出各小问')
-        if part['label'] in labels:
-            raise ValueError('AI 返回的小问名称重复')
-        labels.add(part['label'])
+    planned = _plan_parts(plan)
     if not previous_parts:
         planned = _refine_plan(planned, snapshot['qtype'], snapshot['body'])
     if len(planned) > 100:
@@ -670,7 +699,8 @@ def evaluate(snapshot, progress):
         numerical_disagreement = _numeric_answer_conflict(candidates, judge)
         equation = next((issue for c in candidates if (issue := _equation_issue(c['answer'] + '\n' + c['reason']))), '')
         equation = equation or _equation_issue(judge.get('answer', '') + '\n' + judge.get('explanation', ''))
-        if conflict or arithmetic or numerical_disagreement or equation or _judge_has_doubt(reason):
+        if conflict or arithmetic or numerical_disagreement or equation or _judge_has_doubt(
+                reason, snapshot['qtype'], snapshot['body'], _choice_set(judge.get('answer', ''))):
             verified = False
             reason = conflict or arithmetic or numerical_disagreement or equation or ('核对说明仍有疑点；' + reason)
         output.append(dict(planned_part, status='CONFIRMED' if verified else 'SUSPECT',

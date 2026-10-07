@@ -58,6 +58,23 @@ def test_glued_first_paragraph(tmp_path):
     assert [q['qnum'] for q in qs] == ['1', '2', '3']
 
 
+def test_numbered_exam_instructions_and_mass_lists_are_not_questions(tmp_path):
+    blocks = (p('1．每题选出答案后，用2B铅笔填涂答题卡。')
+              + p('2．本卷共10题，共30分。')
+              + p('3．可能用到的相对原子质量：H 1__C 12__O 16')
+              + p('一、单选题')
+              + p('1．空气中含量最多的气体是（  ）')
+              + p('A．氧气 B．氮气 C．氢气 D．二氧化碳'))
+    qs = b.questions_from_docx(document(tmp_path, blocks))
+    assert len(qs) == 1 and '空气中' in qs[0]['body']
+    assert '答题卡' not in qs[0]['body']
+
+
+def test_mass_reference_attached_to_a_real_question_is_preserved():
+    assert not b.is_exam_notice('可能用到的相对原子质量：H 1 O 16\n1．计算水的相对分子质量。')
+    assert not b.is_exam_notice('已知相对原子质量H 1 O 16，求水的相对分子质量。')
+
+
 def test_subquestions_decimal_and_section(tmp_path):
     qs = b.questions_from_docx(document(tmp_path, p('三、简答题（本大题共3题）') + p('16．请回答下列问题。\n（1）为什么？\n（2）如何验证？\n1.5g 是样品质量。') + p('17．请说明空气污染的主要原因。')))
     assert [q['qnum'] for q in qs] == ['16', '17']

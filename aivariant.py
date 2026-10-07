@@ -1643,19 +1643,22 @@ def _pause_glm_if_quota(exc):
             _glm_pause_until = time.monotonic() + 600
 
 
-def _validate_role_response(system, text):
+def _validate_role_response(system, text, response_validator=None):
     data = parse_model_json(text)
     if system == SYSTEM_GENERATOR:
         answer = data.get('answer')
         if not isinstance(answer, str) or not banklib.answer_text_content(answer) or answer.strip() in ('略', '待补充', '暂无答案', 'N/A', '-'):
             raise ModelError('answer')
+    if response_validator is not None:
+        response_validator(data)
     return data
 
 
-def complete_role(role, system, user_text, image_paths=None, preferred_provider=None):
+def complete_role(role, system, user_text, image_paths=None, preferred_provider=None,
+                  response_validator=None):
     """One question. GLM first when configured, then one DeepSeek call of the same role.
 
-    Returns (text, model_id) for the call that actually returned parseable JSON.
+    Returns (text, model_id) for a call with valid JSON and the requested schema.
     Images are attached only on the flash / vision role.
     """
     if os.environ.get("CHEM_DISABLE_AI") == "1":
@@ -1669,7 +1672,7 @@ def complete_role(role, system, user_text, image_paths=None, preferred_provider=
         model = _ds_flash if role == 'flash' else _ds_pro
         try:
             text = _deepseek_chat(model, system, user_text, image_paths)
-            _validate_role_response(system, text)
+            _validate_role_response(system, text, response_validator)
             return text, model
         except (ModelError, ValueError, json.JSONDecodeError) as exc:
             if isinstance(exc, ModelError) and exc.kind in ('config', 'image'):
@@ -1680,7 +1683,7 @@ def complete_role(role, system, user_text, image_paths=None, preferred_provider=
         model = _glm_flash if role == "flash" else _glm_pro
         try:
             text = _glm_chat(model, system, user_text, image_paths)
-            _validate_role_response(system, text)
+            _validate_role_response(system, text, response_validator)
             return text, model
         except (ModelError, ValueError, json.JSONDecodeError) as exc:
             if isinstance(exc, ModelError) and exc.kind in ("config", "image"):
@@ -1698,7 +1701,7 @@ def complete_role(role, system, user_text, image_paths=None, preferred_provider=
     model = _ds_flash if role == "flash" else _ds_pro
     try:
         text = _deepseek_chat(model, system, user_text, image_paths)
-        _validate_role_response(system, text)
+        _validate_role_response(system, text, response_validator)
     except (ModelError, ValueError, json.JSONDecodeError) as exc:
         if glm_error:
             raise ModelError("http", "GLM：" + glm_error + "；备用模型：" + _safe_text(exc)) from None

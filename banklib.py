@@ -2177,8 +2177,31 @@ def split_answer(parts):
     return body, answer
 
 
+def is_exam_notice(text):
+    """Recognize whole exam instructions, never a mass note attached to a question."""
+    lines = [re.sub(r'^\s*\d+\s*[.．、]\s*', '', line.strip())
+             for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    mass_list = False
+    for line in lines:
+        if re.match(r'^(?:可能用到的|可能用到|供参考的)?相对原子质量\s*[:：]', line):
+            tail = re.split(r'[:：]', line, maxsplit=1)[1]
+            if re.search(r'[\u4e00-\u9fff]', tail):
+                return False
+            mass_list = True
+        elif re.match(r'^(?:每题选出答案后|用(?:黑色|蓝、黑色)[^。\n]{0,40}(?:笔)[^。\n]{0,30}(?:答题卡|答题纸)|本(?:试)?卷共\d+题|第[ⅠⅡⅢIVX]+卷共\d+页|答第[ⅠⅡⅢIVX]+卷前|如需改动|注意事项\s*[:：]?$)', line):
+            if re.search(r'下列|实验|计算|化学反应|方程式|[（(]\d+[）)]', line):
+                return False
+        elif not (mass_list and re.fullmatch(r'[A-Za-z\d\s_.—–\-:：;,，；。]+', line)):
+            return False
+    return True
+
+
 def is_reject(rest):
     r = rest.strip()
+    if is_exam_notice(r):
+        return True
     if "相对原子质量" in r[:24]:
         return True
     for b in REJECT_BITS:

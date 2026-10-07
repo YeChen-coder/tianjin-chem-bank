@@ -36,7 +36,7 @@ def responses(monkeypatch, disagree=True, judge_error=False, missing=False, bad_
     answers = [('H2O', '氮气'), ('H₂O', '氧气' if disagree else '氮气'), ('H2O', '氮气')]
     plan = [{'id': 'p1', 'label': '（1）', 'prompt': '写出水的化学式'},
             {'id': 'p2', 'label': '（2）', 'prompt': '写出空气中含量最多的气体'}]
-    def complete(role, system, user_text, image_paths=None):
+    def complete(role, system, user_text, image_paths=None, **options):
         request = json.loads(user_text)
         calls.append((system, request, image_paths, role))
         if system == aa.PLAN:
@@ -189,8 +189,8 @@ def test_generated_empty_heading_never_becomes_confirmed_answer(bank, monkeypatc
     con, pid = bank
     responses(monkeypatch, disagree=False)
     original = ai.complete_role
-    def placeholder(role, system, text, images=None):
-        raw, model = original(role, system, text, images)
+    def placeholder(role, system, text, images=None, **options):
+        raw, model = original(role, system, text, images, **options)
         value = json.loads(raw)
         if system in (aa.SOLVE, aa.JUDGE):
             for part in value['parts']:
@@ -291,12 +291,12 @@ def test_failed_solution_keeps_evidence_but_no_consensus(bank, monkeypatch):
     responses(monkeypatch, disagree=False)
     original = ai.complete_role
     n = [0]
-    def fail_one(role, system, text, images=None):
+    def fail_one(role, system, text, images=None, **options):
         if system == aa.SOLVE:
             n[0] += 1
             if n[0] == 3:
                 raise ai.ModelError('http', '第三次未完成')
-        return original(role, system, text, images)
+        return original(role, system, text, images, **options)
     monkeypatch.setattr(ai, 'complete_role', fail_one)
     _, state = run_first(con, pid)
     assert state['answer'] == '' and all(len(p['candidates']) == 2 for p in state['parts'])
@@ -351,14 +351,14 @@ def test_ai_does_not_overwrite_teacher_edit_during_request(bank, monkeypatch, ch
     con, pid = bank
     responses(monkeypatch, disagree=False)
     complete = ai.complete_role
-    def edit_while_solving(role, system, text, images=None):
+    def edit_while_solving(role, system, text, images=None, **options):
         if system == aa.JUDGE:
             if changed == 'answer':
                 _, err = aa.edit_answer(con, 1, {'revision': aa.state(con, 1)['revision'], 'answer': '老师正在填写的答案'})
             else:
                 _, err = b.assign_body(con, 1, {'body': '老师已修改题干'})
             assert not err
-        return complete(role, system, text, images)
+        return complete(role, system, text, images, **options)
     monkeypatch.setattr(ai, 'complete_role', edit_while_solving)
     jid, state = run_first(con, pid)
     assert con.execute('SELECT status FROM answer_jobs WHERE id=?', (jid,)).fetchone()[0] == 'stale'
@@ -369,8 +369,8 @@ def test_stop_discards_inflight_result(bank, monkeypatch):
     con, pid = bank
     responses(monkeypatch, disagree=False)
     complete = ai.complete_role
-    def stop_during_call(role, system, text, images=None):
-        result = complete(role, system, text, images)
+    def stop_during_call(role, system, text, images=None, **options):
+        result = complete(role, system, text, images, **options)
         if system == aa.SOLVE:
             aa.stop_all(con)
         return result
@@ -486,8 +486,8 @@ def test_wrong_judge_claim_does_not_override_error_in_its_reason(bank, monkeypat
     con, pid = bank
     responses(monkeypatch, disagree=False)
     original = ai.complete_role
-    def contradictory(role, system, text, images=None):
-        raw, model = original(role, system, text, images)
+    def contradictory(role, system, text, images=None, **options):
+        raw, model = original(role, system, text, images, **options)
         if system == aa.JUDGE:
             result = json.loads(raw)
             result['parts'][1]['reason'] = '第二次计算错误，但多数答案一致所以通过'
@@ -720,3 +720,46 @@ def test_api_bank_batch_is_entire_visible_bank_not_page_filter_or_selection(serv
     assert con.execute('SELECT COUNT(*) FROM answer_jobs').fetchone()[0] == 54
     assert con.execute('SELECT answer FROM questions WHERE id=2').fetchone()[0] == '已有正确答案'
     con.close()
+
+
+@pytest.mark.parametrize('reason,qtype,body,answer', [
+    ('三次均正确，无漏答。', '单选题', '选择正确说法', 'C'),
+    ('三次均正确，无矛盾或漏答。', '单选题', '选择正确说法', 'C'),
+    ('三次均选C，B润湿试纸操作错误。', '单选题', '选择正确说法', 'C'),
+    ('正确指出A、C、D的错误原因。', '单选题', '选择正确说法', 'B'),
+    ('故不正确的是D。', '单选题', '下列说法不正确的是', 'D'),
+])
+def test_judge_distinguishes_distractors_and_negated_doubts(reason, qtype, body, answer):
+    assert not aa._judge_has_doubt(reason, qtype, body, aa._choice_set(answer))
+
+
+@pytest.mark.parametrize('reason', [
+    '第2次计算有误，但多数答案一致。',
+    '三次选C，但C的操作错误。',
+    '第二次解析中存在错误。',
+    '解析中有B操作错误。',
+    '三次一致，但是漏答。',
+])
+def test_actual_answer_or_reasoning_errors_still_block_confirmation(reason):
+    assert aa._judge_has_doubt(reason, '单选题', '选择正确说法', aa._choice_set('C'))
+
+
+def test_arithmetic_does_not_truncate_symbolic_or_compound_right_side():
+    assert not aa._arithmetic_issue('64/32=36/M，解得M=18')
+    assert not aa._arithmetic_issue('1+6=4+3守恒')
+    assert not aa._arithmetic_issue('M/2+3=4')
+    assert aa._arithmetic_issue('64/32=3')
+    assert aa._arithmetic_issue('20g-18.4g=8.7g')
+
+
+def test_notice_record_fails_before_spending_on_models(bank, monkeypatch):
+    con, pid = bank
+    con.execute('UPDATE questions SET body=? WHERE id=1', ('1．用黑色字迹的签字笔将答案写在答题卡上。',))
+    con.commit()
+    def unexpected(*args, **options):
+        pytest.fail('An exam instruction must not trigger an AI call')
+    monkeypatch.setattr(ai, 'complete_role', unexpected)
+    _, state = run_first(con, pid)
+    assert state['job']['status'] == 'error'
+    assert '试卷说明' in state['job']['error']
+    assert not state['has_answer']

@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import aivariant as a
 import banklib as b
+import aianswers as aa
 
 
 @pytest.fixture(autouse=True)
@@ -111,6 +112,47 @@ def test_missing_generated_answer_falls_back_before_saving(monkeypatch):
     monkeypatch.setattr(a, '_deepseek_chat', lambda *args: '{"stem":"题目","answer":"略"}')
     with pytest.raises(a.ModelError, match='没有完整答案'):
         a.complete_role('flash', a.SYSTEM_GENERATOR, 'u')
+
+
+@pytest.mark.parametrize('invalid', [
+    {}, {'parts': []}, {'parts': 'not a list'},
+    {'parts': [{'id': 'p1', 'label': 'one'}]},
+    {'parts': [{'id': 'p1', 'label': 'one', 'prompt': 'question'},
+               {'id': 'p1', 'label': 'two', 'prompt': 'question'}]},
+    {'parts': [{'id': 'p1', 'label': 'one', 'prompt': 'question'},
+               {'id': 'p2', 'label': 'one', 'prompt': 'question'}]},
+])
+def test_invalid_answer_plan_uses_backup_with_same_stem_and_images(monkeypatch, invalid):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    monkeypatch.setattr(a, '_glm_key', 'fixture-glm')
+    monkeypatch.setattr(a, '_ds_key', 'fixture-ds')
+    calls = []
+    valid = {'parts': [{'id': 'p1', 'label': 'one', 'prompt': 'original question'}]}
+    def glm(model, system, stem, images):
+        calls.append(('glm', system, stem, images))
+        return json.dumps(invalid)
+    def ds(model, system, stem, images):
+        calls.append(('ds', system, stem, images))
+        return json.dumps(valid)
+    monkeypatch.setattr(a, '_glm_chat', glm)
+    monkeypatch.setattr(a, '_deepseek_chat', ds)
+    stem = {'body': 'original question', 'qtype': 'test', 'segments': []}
+    value, model = aa._call(aa.PLAN, stem, ['original-diagram.png'], 'flash')
+    assert value == valid and model == a._ds_flash
+    assert [c[0] for c in calls] == ['glm', 'ds']
+    assert all(c[1] == aa.PLAN and json.loads(c[2]) == stem
+               and c[3] == ['original-diagram.png'] for c in calls)
+    assert not a._glm_paused()  # A schema error is not quota exhaustion.
+
+
+def test_both_invalid_answer_plans_fail_without_inventing_parts(monkeypatch):
+    monkeypatch.delenv('CHEM_DISABLE_AI', raising=False)
+    monkeypatch.setattr(a, '_glm_key', 'fixture-glm')
+    monkeypatch.setattr(a, '_ds_key', 'fixture-ds')
+    monkeypatch.setattr(a, '_glm_chat', lambda *args: '{}')
+    monkeypatch.setattr(a, '_deepseek_chat', lambda *args: '{"parts":[]}')
+    with pytest.raises(a.ModelError, match='AI 没有完整列出作答位置'):
+        aa._call(aa.PLAN, {'body': 'original'}, [], 'flash')
 
 
 def test_glm_quota_fallback_cooldown_and_recovery(monkeypatch):
