@@ -725,12 +725,80 @@ def test_api_bank_batch_is_entire_visible_bank_not_page_filter_or_selection(serv
 @pytest.mark.parametrize('reason,qtype,body,answer', [
     ('三次均正确，无漏答。', '单选题', '选择正确说法', 'C'),
     ('三次均正确，无矛盾或漏答。', '单选题', '选择正确说法', 'C'),
+    ('三次均选A，答案一致且正确；解析均科学无误，没有夹带错误结论。', '单选题', '选择正确说法', 'A'),
+    ('未发现有科学错误。', '单选题', '选择正确说法', 'A'),
     ('三次均选C，B润湿试纸操作错误。', '单选题', '选择正确说法', 'C'),
     ('正确指出A、C、D的错误原因。', '单选题', '选择正确说法', 'B'),
+    ('三次均选C且解析语义等价。A、B、D均判断错误，C的变量分析与结论正确。', '单选题', '选择正确说法', 'C'),
     ('故不正确的是D。', '单选题', '下列说法不正确的是', 'D'),
+    ('三次均选D，氧元素守恒说明D错误。三次答案均科学正确且语义等价。', '单选题', '下列说法错误的是', 'D'),
+    ('D说法错误，三次答案正确。', '单选题', '下列说法不正确的是', 'D'),
+    ('D的说法错误，三次答案正确。', '单选题', '下列说法不正确的是', 'D'),
 ])
 def test_judge_distinguishes_distractors_and_negated_doubts(reason, qtype, body, answer):
     assert not aa._judge_has_doubt(reason, qtype, body, aa._choice_set(answer))
+
+
+@pytest.mark.parametrize('reason', ['第二次作答D错误。', '解析D错误。', '选D错误。',
+                                   'D说法错误，但第二次计算有误。', 'D错误，但三次答案不一致。'])
+def test_negative_choice_still_rejects_solver_errors(reason):
+    assert aa._judge_has_doubt(reason, '单选题', '下列说法错误的是', frozenset('D'))
+
+
+def test_positive_question_with_wrong_word_in_options_is_not_negative():
+    body = '下列说法正确的是\nA.错误的是温度\nB.正确的是质量'
+    assert aa._judge_has_doubt('A错误', '单选题', body, frozenset('A'))
+
+
+def test_recorded_evidence_uses_same_guards_without_model_calls(bank, monkeypatch):
+    con, pid = bank
+    responses(monkeypatch, disagree=False)
+    queued, err = aa.enqueue(con, pid, 1)
+    snapshot = json.loads(con.execute('SELECT snapshot FROM answer_jobs WHERE id=?',
+                                     (queued['jobs'][0]['id'],)).fetchone()[0])
+    first = aa.evaluate(snapshot, lambda phase: None)
+    monkeypatch.setattr(ai, 'complete_role', lambda *args, **kwargs: pytest.fail('No model calls during evidence replay'))
+    replay = aa.recheck_evidence(snapshot, first)
+    assert replay['parts'] == first['parts']
+    assert replay['solutions'] == first['solutions']
+    assert replay['judgement'] == first['judgement']
+
+
+def test_replay_never_confirms_disagreement_or_missing_conditions(bank, monkeypatch):
+    con, pid = bank
+    responses(monkeypatch, disagree=True)
+    queued, _ = aa.enqueue(con, pid, 1)
+    snapshot = json.loads(con.execute('SELECT snapshot FROM answer_jobs WHERE id=?',
+                                     (queued['jobs'][0]['id'],)).fetchone()[0])
+    first = aa.evaluate(snapshot, lambda phase: None)
+    first['solutions'][0]['parts'][0]['conditions_sufficient'] = False
+    replay = aa.recheck_evidence(snapshot, first)
+    assert all(p['status'] == 'SUSPECT' for p in replay['parts'])
+
+
+def test_resuming_partial_work_reuses_successful_solutions_and_only_calls_missing_steps(bank, monkeypatch):
+    con, pid = bank
+    responses(monkeypatch, disagree=False)
+    queued, _ = aa.enqueue(con, pid, 1)
+    snapshot = json.loads(con.execute('SELECT snapshot FROM answer_jobs WHERE id=?',
+                                     (queued['jobs'][0]['id'],)).fetchone()[0])
+    original = ai.complete_role
+    attempts = [0]
+    def fail_third(role, system, *args, **kwargs):
+        if system == aa.SOLVE:
+            attempts[0] += 1
+            if attempts[0] == 3:
+                raise ai.ModelError('http', 'HTTP 402 Insufficient Balance', http_status=402)
+        return original(role, system, *args, **kwargs)
+    monkeypatch.setattr(ai, 'complete_role', fail_third)
+    partial = aa.evaluate(snapshot, lambda phase: None)
+    assert len(partial['solutions']) == 2
+    calls = responses(monkeypatch, disagree=False)
+    resumed = aa.evaluate(snapshot, lambda phase: None, resume=partial)
+    assert [c[0] for c in calls] == [aa.SOLVE, aa.JUDGE]
+    assert resumed['solutions'][:2] == partial['solutions']
+    assert not resumed['failures'] and not resumed['judge_error']
+    assert all(p['status'] == 'CONFIRMED' for p in resumed['parts'])
 
 
 @pytest.mark.parametrize('reason', [
@@ -750,6 +818,13 @@ def test_arithmetic_does_not_truncate_symbolic_or_compound_right_side():
     assert not aa._arithmetic_issue('M/2+3=4')
     assert aa._arithmetic_issue('64/32=3')
     assert aa._arithmetic_issue('20g-18.4g=8.7g')
+
+
+def test_arithmetic_preserves_units_in_compound_right_side():
+    assert not aa._arithmetic_issue('12.8×44/128+10×44/100=4.4g+4.4g=8.8g')
+    assert not aa._arithmetic_issue('12.8×44/128+10×44/100=4.4 g+4.4 g=8.8 g')
+    assert aa._arithmetic_issue('4.4g+4.4g=4.4g')
+    assert aa._arithmetic_issue('12.8×44/128+10×44/100=4.4g，故为4.4g')
 
 
 def test_notice_record_fails_before_spending_on_models(bank, monkeypatch):

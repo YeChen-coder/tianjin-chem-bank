@@ -139,7 +139,7 @@ def main():
         # Provider routing stays offline: GLM first, one DeepSeek fallback, no sockets.
         saved = (
             aivariant._glm_key, aivariant._ds_key,
-            aivariant._glm_flash, aivariant._glm_pro,
+            aivariant._glm_flash, aivariant._glm_pro, aivariant._glm_flashx,
             aivariant._ds_flash, aivariant._ds_pro,
             aivariant._glm_chat, aivariant._deepseek_chat,
         )
@@ -147,6 +147,7 @@ def main():
             aivariant._glm_key = "not-a-real-key"
             aivariant._ds_key = "not-a-real-key"
             aivariant._glm_flash = "glm-5.3-flash"
+            aivariant._glm_flashx = ""
             aivariant._glm_pro = "glm-5.3"
             aivariant._ds_flash = "deepseek-flash"
             aivariant._ds_pro = "deepseek-v4-pro"
@@ -218,7 +219,7 @@ def main():
         finally:
             (
                 aivariant._glm_key, aivariant._ds_key,
-                aivariant._glm_flash, aivariant._glm_pro,
+                aivariant._glm_flash, aivariant._glm_pro, aivariant._glm_flashx,
                 aivariant._ds_flash, aivariant._ds_pro,
                 aivariant._glm_chat, aivariant._deepseek_chat,
             ) = saved

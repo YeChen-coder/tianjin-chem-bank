@@ -2,15 +2,22 @@
 """AI variants for questions already on a paper.
 
 Environment (names only; values are read when the worker starts, never stored):
-  GLM_API_KEY        preferred provider. Quota exhaustion pauses GLM for 10 minutes
+  KIMI_API_KEY       domestic Moonshot API; KIMI_MODEL defaults to kimi-k2.6.
+                     Thinking enabled, 32768 tokens, 300s request deadline.
+  CHEM_AI_PROVIDER   auto (Kimi, GLM, DeepSeek) or fixed kimi / glm / deepseek.
+  GLM_API_KEY        provider. Quota exhaustion pauses GLM for 10 minutes
                      while DeepSeek continues. Never write keys to DB, UI, or logs.
+  GLM_FLASHX         default glm-5.3-flashx; tried first for the flash role.
+                     Set to off to use Flash directly. Balance exhaustion uses Flash.
   GLM_FLASH          default glm-5.3-flash (vision / first generation / vision judge).
                      thinking.type only supports enabled. Temperature 1, top_p 0.95.
   GLM_PRO            default glm-5.3 (text flagship). Never send images to it.
   GLM_API_URL        default https://open.bigmodel.cn/api/paas/v4/chat/completions
   GLM_REASONING_EFFORT default high (low / high / max on GLM-5.3).
   GLM_MAX_TOKENS     default 8192; includes the model's reasoning budget.
-  DEEPSEEK_MAX_TOKENS default 8192; non-thinking mode retained on format retry.
+  DEEPSEEK_MAX_TOKENS default 32768; thinking high retained on format retry.
+  DEEPSEEK_REASONING_EFFORT default high (none / low / high / max).
+  DEEPSEEK_TIMEOUT   default 300 seconds including heartbeat-only responses.
   DEEPSEEK_API_KEY   fallback. Used once when GLM is unset or that call fails.
                      Do not write it to the DB, UI, or logs.
   DEEPSEEK_FLASH     default deepseek-flash
@@ -41,6 +48,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import banklib
 import question_analysis
@@ -76,16 +85,24 @@ _flash_model = "deepseek-flash"
 _pro_model = "deepseek-v4-pro"
 _glm_key = ""
 _glm_flash = "glm-5.3-flash"
+_glm_flashx = "glm-5.3-flashx"
 _glm_pro = "glm-5.3"
 _glm_url = GLM_API_URL
 _ds_key = ""
 _ds_flash = "deepseek-flash"
 _ds_pro = "deepseek-v4-pro"
+_kimi_key = ""
+_kimi_flash = "kimi-k2.6"
+_kimi_pro = "kimi-k2.6"
+_kimi_url = "https://api.moonshot.cn/v1/chat/completions"
+_kimi_call_lock = threading.Lock()
+_call_context = ContextVar('chem_ai_call_context', default=(None, None, None, None))
 _CALL_TIMEOUT = 90
 _KEEPALIVE_LIMIT = 60
 _provider_lock = threading.Lock()
 _glm_pause_until = 0.0
 _glm_pause_key = ''
+_glm_flashx_pauses = {}
 _GLM_QUOTA_CODES = {'1113', '1308', '1309', '1310', '1314', '1316', '1317', '1318', '1319', '1320', '1321'}
 
 SYSTEM_PROFILE = """你是天津市九年级化学教师的题目分析助手。范围是人民教育出版社《义务教育教科书 化学》九年级上册、下册的常规教学内容。不要使用大学化学，也不要超纲。
@@ -295,7 +312,7 @@ def parse_judge_status(payload):
 
 def _safe_text(exc):
     s = str(exc)
-    for key in (_glm_key, _ds_key, _api_key):
+    for key in (_glm_key, _ds_key, _api_key, _kimi_key):
         if key:
             s = s.replace(key, "[redacted]")
     s = s[:240]
@@ -1341,14 +1358,16 @@ def _json_payload(blob):
     return data
 
 
-def _http_post(url, key, body, timeout):
+def _http_post(url, key, body, timeout, keepalive_limit=None):
     """POST JSON without streaming. Hard deadline `timeout` seconds.
 
-    A socket that only delivers keep-alives, with no content within 60s, fails.
+    GLM keeps its 60s heartbeat limit. Reasoning providers may explicitly allow
+    heartbeat-only responses until their configured overall request deadline.
     The key is sent on the Authorization header and is never logged.
     Returns (status, payload or None).
     """
     parsed = urllib.parse.urlparse(url)
+    heartbeat_deadline = _KEEPALIVE_LIMIT if keepalive_limit is None else min(timeout, keepalive_limit)
     if parsed.scheme != "https" or not parsed.hostname:
         return 503, None
     path = parsed.path or "/"
@@ -1384,20 +1403,19 @@ def _http_post(url, key, body, timeout):
             now = time.monotonic()
             if now - started >= timeout:
                 return 503, {"error": {"message": "模型请求超过 %s 秒限时" % timeout}}
-            # Keep-alives alone are not progress. Content must show up within 60s
-            # of the first body byte. A quiet non-streaming response may use the
-            # full socket deadline (about 90s) before any byte arrives.
+            # Keep-alives alone are not progress. Bound both heartbeat-only and
+            # quiet non-streaming responses by the configured deadlines.
             if (
                 first_byte is not None
                 and _only_keepalive(buf)
-                and now - first_byte >= _KEEPALIVE_LIMIT
+                and now - first_byte >= heartbeat_deadline
             ):
                 return 503, {"error": {"message": "模型只返回心跳，没有有效结果"}}
             sock = conn.sock or getattr(getattr(resp.fp, "raw", None), "_sock", None)
             if sock is not None:
                 remaining = timeout - (now - started)
                 if first_byte is not None and _only_keepalive(buf):
-                    remaining = min(remaining, _KEEPALIVE_LIMIT - (now - first_byte))
+                    remaining = min(remaining, heartbeat_deadline - (now - first_byte))
                 sock.settimeout(max(0.1, remaining))
             part = resp.read1(8192)
             if not part:
@@ -1429,7 +1447,55 @@ def _http_post(url, key, body, timeout):
 
 def _post_chat(key, body):
     """DeepSeek chat completion. Same request shape as before; finite deadline."""
-    return _http_post(API_URL, key, body, _CALL_TIMEOUT)
+    return _provider_post('deepseek', API_URL, key, body)
+
+
+def _config_int(name, default, minimum=512, maximum=131072):
+    try:
+        value = int(os.environ.get(name) or default)
+        if not minimum <= value <= maximum:
+            raise ValueError()
+        return value
+    except ValueError:
+        raise ModelError('config', '%s 必须是 %s 至 %s 的整数' % (name, minimum, maximum)) from None
+
+
+@contextmanager
+def provider_scope(provider, observer=None, stop_event=None, cancel_check=None):
+    """Pin one workflow to one provider, without mutating other worker threads."""
+    if provider not in (None, 'kimi', 'deepseek', 'glm'):
+        raise ModelError('config', '未知 AI 服务')
+    token = _call_context.set((provider, observer, stop_event, cancel_check))
+    try:
+        yield
+    finally:
+        _call_context.reset(token)
+
+
+def _check_pending_call():
+    _, _, stop_event, cancel_check = _call_context.get()
+    if cancel_check is not None and cancel_check():
+        raise InterruptedError('任务已叫停，不再发送 API 请求')
+    if stop_event is not None and stop_event.is_set():
+        raise ModelError('http', '服务余额或权限不足，已暂停后续请求，请恢复服务后续跑')
+
+
+def _provider_post(provider, url, key, body):
+    timeout = _config_int(provider.upper() + '_TIMEOUT', 300, 30, 900)
+    started = time.monotonic()
+    status, data = _http_post(url, key, body, timeout, timeout)
+    observer = _call_context.get()[1]
+    if observer:
+        choices = (data or {}).get('choices') or []
+        observer({'provider': provider, 'model': body['model'], 'http_status': status,
+                  'elapsed_seconds': round(time.monotonic() - started, 3),
+                  'usage': (data or {}).get('usage'),
+                  'finish_reason': choices[0].get('finish_reason') if choices else None,
+                  'max_tokens': body.get('max_tokens', body.get('max_completion_tokens')),
+                  'thinking': body.get('thinking'), 'reasoning_effort': body.get('reasoning_effort'),
+                  'json_mode': 'response_format' in body,
+                  'error': _safe_text((data or {}).get('error', '')) if status != 200 else None})
+    return status, data
 
 
 def _message_text(data):
@@ -1498,30 +1564,47 @@ def _load_local_keys():
 def _load_provider_config():
     """Read provider env vars. Values stay in memory and are never written out."""
     global _api_key, _flash_model, _pro_model
-    global _glm_key, _glm_flash, _glm_pro, _glm_url
+    global _glm_key, _glm_flash, _glm_flashx, _glm_pro, _glm_url
     global _ds_key, _ds_flash, _ds_pro
+    global _kimi_key, _kimi_flash, _kimi_pro, _kimi_url
     _load_local_keys()
     _glm_key = (os.environ.get("GLM_API_KEY") or "").strip()
     _glm_flash = (os.environ.get("GLM_FLASH") or "").strip() or "glm-5.3-flash"
+    _glm_flashx = (os.environ.get("GLM_FLASHX") or "").strip() or "glm-5.3-flashx"
+    if _glm_flashx.lower() == 'off':
+        _glm_flashx = ''
     _glm_pro = (os.environ.get("GLM_PRO") or "").strip() or "glm-5.3"
     _glm_url = (os.environ.get("GLM_API_URL") or "").strip() or GLM_API_URL
     _ds_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
     _ds_flash = (os.environ.get("DEEPSEEK_FLASH") or "").strip() or "deepseek-flash"
     _ds_pro = (os.environ.get("DEEPSEEK_PRO") or "").strip() or "deepseek-v4-pro"
+    _kimi_key = (os.environ.get('KIMI_API_KEY') or os.environ.get('MOONSHOT_API_KEY') or '').strip()
+    _kimi_flash = (os.environ.get('KIMI_FLASH') or os.environ.get('KIMI_MODEL') or 'kimi-k2.6').strip()
+    _kimi_pro = (os.environ.get('KIMI_PRO') or _kimi_flash).strip()
+    _kimi_url = (os.environ.get('KIMI_API_URL') or 'https://api.moonshot.cn/v1/chat/completions').strip()
     _api_key = _ds_key
     _flash_model = _ds_flash
     _pro_model = _ds_pro
 
 
 def _preferred_model(role):
+    provider = _call_context.get()[0] or os.environ.get('CHEM_AI_PROVIDER', 'auto')
+    if provider == 'kimi':
+        return _kimi_flash if role == 'flash' else _kimi_pro
+    if provider == 'deepseek':
+        return _ds_flash if role == 'flash' else _ds_pro
+    if provider == 'glm':
+        return _glm_role_models(role)[0]
+    if _kimi_key:
+        return _kimi_flash if role == 'flash' else _kimi_pro
     if _glm_key:
-        return _glm_flash if role == "flash" else _glm_pro
+        return _glm_role_models(role)[0]
     return _ds_flash if role == "flash" else _ds_pro
 
 
 def _glm_bodies(model, system, user_text, image_paths):
     """GLM request bodies. thinking.type is enabled. Images only on the flash model."""
-    flash = model == _glm_flash
+    flash = model in (_glm_flash, _glm_flashx)
     content = _user_content(user_text, image_paths if flash else None)
     thinking = {"type": "enabled"}
     if flash:
@@ -1588,29 +1671,32 @@ def _deepseek_chat(model, system, user_text, image_paths=None):
     if not key:
         raise ModelError("config")
     content = _user_content(user_text, image_paths)
-    try:
-        budget = int(os.environ.get('DEEPSEEK_MAX_TOKENS') or 8192)
-        if not 512 <= budget <= 32768:
-            raise ValueError()
-    except ValueError:
-        raise ModelError('config', 'DEEPSEEK_MAX_TOKENS 必须是 512 至 32768 的整数')
+    budget = _config_int('DEEPSEEK_MAX_TOKENS', 32768)
+    effort = (os.environ.get('DEEPSEEK_REASONING_EFFORT') or 'high').strip().lower()
+    if effort not in ('none', 'low', 'high', 'max'):
+        raise ModelError('config', 'DEEPSEEK_REASONING_EFFORT 只能是 none、low、high 或 max')
     base = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": content},
         ],
-        "temperature": 0.3,
         "max_tokens": budget,
         "stream": False,
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "disabled" if effort == 'none' else "enabled"},
+        "reasoning_effort": effort,
     }
+    if effort == 'none':
+        base['temperature'] = 0.3
+    if image_paths:
+        for item in content[1:]:
+            item['image_url']['detail'] = 'original'
     rich = dict(base)
     rich["response_format"] = {"type": "json_object"}
-    rich["thinking"] = {"type": "disabled"}
     bodies = (rich, base)
     for bi, body in enumerate(bodies):
         for attempt in (0, 1):
+            _check_pending_call()
             status, data = _post_chat(key, body)
             if status == 200:
                 return _message_text(data)
@@ -1630,9 +1716,82 @@ def _deepseek_chat(model, system, user_text, image_paths=None):
     raise ModelError("http")
 
 
+def _kimi_bodies(model, system, user_text, image_paths=None):
+    budget = _config_int('KIMI_MAX_TOKENS', 32768)
+    body = {'model': model, 'messages': [{'role': 'system', 'content': system},
+            {'role': 'user', 'content': _user_content(user_text, image_paths)}],
+            'stream': False, 'response_format': {'type': 'json_object'}}
+    if model.startswith('kimi-k3'):
+        effort = (os.environ.get('KIMI_REASONING_EFFORT') or 'high').strip().lower()
+        if effort not in ('low', 'high', 'max'):
+            raise ModelError('config', 'KIMI_REASONING_EFFORT 只能是 low、high 或 max')
+        body.update(reasoning_effort=effort, max_completion_tokens=budget)
+    else:
+        # K2.x supports thinking, not reasoning_effort. Fixed sampling defaults are omitted.
+        body.update(thinking={'type': 'enabled'}, max_tokens=budget)
+    plain = dict(body)
+    plain.pop('response_format')
+    return body, plain
+
+
+def _kimi_chat(model, system, user_text, image_paths=None):
+    # Harvey's account reports a maximum organization concurrency of one.
+    # Share the gate across answer and variant workers, not just the benchmark.
+    with _kimi_call_lock:
+        _check_pending_call()
+        return _kimi_chat_serial(model, system, user_text, image_paths)
+
+
+def _kimi_chat_serial(model, system, user_text, image_paths=None):
+    if not _kimi_key:
+        raise ModelError('config', '请在 keys.local 填写 KIMI_API_KEY 后重启程序')
+    for index, body in enumerate(_kimi_bodies(model, system, user_text, image_paths)):
+        for attempt in range(7):
+            _check_pending_call()
+            status, data = _provider_post('kimi', _kimi_url, _kimi_key, body)
+            if status == 200:
+                return _message_text(data)
+            if status == 429 and attempt < 6:
+                time.sleep(1.5 * 2 ** attempt)
+                continue
+            if status in (500, 502, 503, 504) and attempt == 0:
+                time.sleep(1.5)
+                continue
+            if status == 400 and index == 0:
+                break
+            if status in (401, 403):
+                raise ModelError('auth')
+            error = data.get('error', {}) if isinstance(data, dict) else {}
+            raise ModelError('http', 'Kimi 请求失败（HTTP %s）：%s' % (status, _safe_text(error)),
+                             http_status=status)
+    raise ModelError('http')
+
+
 def _glm_paused():
     with _provider_lock:
         return bool(_glm_key and _glm_pause_key == _glm_key and time.monotonic() < _glm_pause_until)
+
+
+def _glm_role_models(role):
+    if role != 'flash':
+        return [_glm_pro]
+    identity = (_glm_key, _glm_url, _glm_flashx)
+    with _provider_lock:
+        paused = time.monotonic() < _glm_flashx_pauses.get(identity, 0.0)
+    if _glm_flashx and _glm_flashx != _glm_flash and not paused:
+        return [_glm_flashx, _glm_flash]
+    return [_glm_flash]
+
+
+def _flashx_balance_exhausted(exc):
+    # 1113 is balance/resource exhaustion; 1302/1305 are temporary rate limits.
+    # Output token limits and Coding Plan limits do not exhaust a FlashX gift pack.
+    return isinstance(exc, ModelError) and (exc.provider_code == '1113' or exc.http_status == 402)
+
+
+def _pause_flashx():
+    with _provider_lock:
+        _glm_flashx_pauses[(_glm_key, _glm_url, _glm_flashx)] = time.monotonic() + 600
 
 
 def _pause_glm_if_quota(exc):
@@ -1656,57 +1815,71 @@ def _validate_role_response(system, text, response_validator=None):
 
 def complete_role(role, system, user_text, image_paths=None, preferred_provider=None,
                   response_validator=None):
-    """One question. GLM first when configured, then one DeepSeek call of the same role.
+    """Call a selected provider, validating JSON and schema before accepting it.
 
-    Returns (text, model_id) for a call with valid JSON and the requested schema.
-    Images are attached only on the flash / vision role.
+    A pinned workflow stays on its provider (GLM may use Flash after FlashX
+    balance exhaustion). Auto mode retains provider errors. Images stay on vision roles.
     """
     if os.environ.get("CHEM_DISABLE_AI") == "1":
         raise ModelError("config")
+    _check_pending_call()
     if role != "flash":
         image_paths = None
-    ds_error = None
-    # Answer-only independent checking can use a different available provider.
-    # This preference is local to the call; never switch global keys in worker threads.
-    if preferred_provider == 'deepseek' and _ds_key:
-        model = _ds_flash if role == 'flash' else _ds_pro
+    providers = {
+        'kimi': (_kimi_key, _kimi_flash, _kimi_pro, _kimi_chat),
+        'glm': (_glm_key, _glm_flash, _glm_pro, _glm_chat),
+        'deepseek': (_ds_key, _ds_flash, _ds_pro, _deepseek_chat),
+    }
+    pinned = _call_context.get()[0] or (os.environ.get('CHEM_AI_PROVIDER') or 'auto').strip().lower()
+    if pinned not in ('auto', *providers):
+        raise ModelError('config', 'CHEM_AI_PROVIDER 只能是 auto、kimi、deepseek 或 glm')
+    if pinned != 'auto':
+        order = [pinned]
+        if not providers[pinned][0]:
+            raise ModelError('config', '请在 keys.local 配置 %s_API_KEY 后重启程序' % pinned.upper())
+    else:
+        order = [p for p, config in providers.items() if config[0]]
+        if _glm_paused() and any(p != 'glm' for p in order):
+            order = [p for p in order if p != 'glm']
+        if preferred_provider in order:
+            order.remove(preferred_provider)
+            order.insert(0, preferred_provider)
+    if not order:
+        raise ModelError('config')
+    errors = []
+    for provider in order:
+        key, flash, pro, call = providers[provider]
+        model = flash if role == 'flash' else pro
         try:
-            text = _deepseek_chat(model, system, user_text, image_paths)
-            _validate_role_response(system, text, response_validator)
-            return text, model
+            models = _glm_role_models(role) if provider == 'glm' else [model]
+            flashx_error = None
+            for model in models:
+                _check_pending_call()
+                try:
+                    text = call(model, system, user_text, image_paths)
+                    _validate_role_response(system, text, response_validator)
+                    return text, model
+                except (ModelError, ValueError, json.JSONDecodeError) as exc:
+                    if (provider == 'glm' and model == _glm_flashx and model != _glm_flash
+                            and _flashx_balance_exhausted(exc)):
+                        _pause_flashx()
+                        flashx_error = exc
+                        continue
+                    if flashx_error and isinstance(exc, ModelError) and exc.kind not in ('config', 'image'):
+                        raise ModelError(exc.kind, 'FlashX：%s；Flash：%s' %
+                                         (_safe_text(flashx_error), _safe_text(exc)),
+                                         http_status=exc.http_status, provider_code=exc.provider_code) from None
+                    raise
         except (ModelError, ValueError, json.JSONDecodeError) as exc:
-            if isinstance(exc, ModelError) and exc.kind in ('config', 'image'):
+            if pinned != 'auto' or (isinstance(exc, ModelError) and exc.kind in ('config', 'image')):
                 raise
-            ds_error = exc
-    glm_error = None
-    if _glm_key and not (_ds_key and _glm_paused()):
-        model = _glm_flash if role == "flash" else _glm_pro
-        try:
-            text = _glm_chat(model, system, user_text, image_paths)
-            _validate_role_response(system, text, response_validator)
-            return text, model
-        except (ModelError, ValueError, json.JSONDecodeError) as exc:
-            if isinstance(exc, ModelError) and exc.kind in ("config", "image"):
-                raise
-            if not _ds_key:
-                raise
-            _pause_glm_if_quota(exc)
-            glm_error = _safe_text(exc)
-    if ds_error is not None:
-        if glm_error:
-            raise ModelError('http', '独立核对服务：' + _safe_text(ds_error) + '；GLM：' + glm_error) from None
-        raise ds_error
-    if not _ds_key:
-        raise ModelError("config")
-    model = _ds_flash if role == "flash" else _ds_pro
-    try:
-        text = _deepseek_chat(model, system, user_text, image_paths)
-        _validate_role_response(system, text, response_validator)
-    except (ModelError, ValueError, json.JSONDecodeError) as exc:
-        if glm_error:
-            raise ModelError("http", "GLM：" + glm_error + "；备用模型：" + _safe_text(exc)) from None
-        raise
-    return text, model
+            if provider == 'glm':
+                _pause_glm_if_quota(exc)
+            errors.append((provider, exc))
+    if len(errors) == 1:
+        raise errors[0][1]
+    names = {'kimi': 'Kimi', 'glm': 'GLM', 'deepseek': 'DeepSeek'}
+    raise ModelError('http', '；'.join(names[p] + '：' + _safe_text(exc) for p, exc in errors)) from None
 
 
 def _plain(segments):
@@ -2338,9 +2511,11 @@ def _claim(con):
 
 def _run_job(job_id, base_id):
     con = None
+    expected_epoch = _current_epoch()
     try:
         con = _connect()
-        _process(con, job_id)
+        with provider_scope(None, cancel_check=lambda: _current_epoch() != expected_epoch or int(job_id) in _cancelled_now()):
+            _process(con, job_id)
     except Exception as exc:
         if con is not None:
             try:

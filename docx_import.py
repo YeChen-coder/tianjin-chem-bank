@@ -6,7 +6,10 @@ from xml.etree import ElementTree as ET
 import question_analysis
 
 QNUMBER = re.compile(r"^\s*(?:第\s*)?(\d{1,3})(?:\s*题\s*[:：.．、]?|\s*[.．、:：)）](?!\d)|(?=\s*[（(]\s*\d+(?:\.\d+)?\s*分))\s*(.*)$", re.S)
-ANSWER_SECTION = re.compile(r"^(?:参考答案|答案与解析|参考答案与解析|试题解析|答案解析|答案)(?:\s*[：:]|\s*$)")
+ANSWER_SECTION = re.compile(
+    r"^(?:(?=[^。！？?：:\n]{0,100}(?:试卷|试题|化学|考试|学年))[^。！？?：:\n]{1,100})?"
+    r"(?:参考答案(?:与解析|及评分标准)?|答案与解析|试题解析|答案解析|答案)(?:\s*[：:]|\s*$)"
+)
 
 
 class Numbering:
@@ -149,7 +152,11 @@ def parse_docx(path):
             answer_mode, answer_target = True, None
             return
         hint = question_analysis.section_type(text)
-        if hint or b.SECTION.match(text) or b.QTYPE_HEADER.match(text):
+        # A short instruction inside a calculation question is not a new section.
+        calculation_prompt = cur is not None and text.strip() in {"计算", "计算：", "计算:"}
+        if not calculation_prompt and (hint or b.SECTION.match(text) or b.QTYPE_HEADER.match(text)):
+            if any(part["t"] == "img" for part in parts):
+                warnings.append("题型标题包含浮动图片，需对照原卷核对图片所属题目")
             flush()
             section = hint
             started = True

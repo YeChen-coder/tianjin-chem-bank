@@ -3554,5 +3554,8 @@ if __name__ == "__main__":
         print(json.dumps({k: stats[k] for k in ("questions", "with_images", "duplicates_merged", "source_files")}, ensure_ascii=False))
     elif cmd == "serve":
         serve()
+    elif cmd == "benchmark":
+        import chem_benchmark
+        raise SystemExit(chem_benchmark.main(sys.argv[2:]))
     else:
-        print("usage: app.py import|serve")
+        print("usage: app.py import|serve|benchmark")

@@ -498,7 +498,7 @@ def _refine_plan(parts, qtype, body=''):
 
 def _judge_has_doubt(reason, qtype='', body='', selected=None):
     doubt = r'错误|矛盾|分歧|疑点|问题|漏答'
-    cleaned = re.sub(r'(?:没有|未发现|未见|不存在|无)(?:科学性?|明显|实质|计算)?(?:' + doubt + r')(?:[、或和及](?:' + doubt + r'))*|无误', '', reason)
+    cleaned = re.sub(r'(?:没有|未发现|未见|不存在|无)(?:任何|夹带|出现|存在|发现|有)?(?:科学性?|明显|实质|计算)?(?:' + doubt + r')(?:[、或和及](?:' + doubt + r'))*|无误', '', reason)
     if qtype in ('单选题', '多选题') and selected:
         # Errors attributed to an unselected distractor do not contradict a
         # correct solution. Errors in a solver's reasoning remain doubts.
@@ -508,9 +508,21 @@ def _judge_has_doubt(reason, qtype='', body='', selected=None):
             if letters.isdisjoint(selected) and not re.search(r'第[一二三123]次|解析(?:中|里)?(?:有|存在|出现)', prefix):
                 return ''
             return match[0]
-        cleaned = re.sub(r'(?<![选为是A-H、])([A-H](?:[、,，][A-H])*)(?:选项|项|的)?(?:错误原因|[^，。；;\n]{0,25}?操作错误|错误|不正确)', distractor, cleaned)
+        cleaned = re.sub(r'(?<![选为是A-H、])([A-H](?:[、,，][A-H])*)(?:选项|项|的)?(?:均|都)?(?:判断|判定)?(?:错误原因|[^，。；;\n]{0,25}?操作错误|错误|不正确)', distractor, cleaned)
         # A negative choice question asks for the incorrect option itself.
-        if re.search(r'不正确|错误|不合理', body):
+        question_stem = re.split(r'(?:^|\n)\s*[A-H][.．、]', body, maxsplit=1)[0]
+        if re.search(r'(?:不正确|错误|不合理)(?:的是|的有|的选项)', question_stem):
+            def incorrect_option(match):
+                letters = set(re.findall(r'[A-H]', match[1]))
+                prefix = cleaned[max(0, match.start()-20):match.start()]
+                # Only explicit statements about an option, never errors in a
+                # solver's answer/reasoning or uncertainty about choosing it.
+                if letters <= selected and not re.search(
+                        r'第[一二三123]次|(?:答案|作答|解析|推导|判断|结论)[^，。；;\n]{0,10}$', prefix):
+                    return ''
+                return match[0]
+            cleaned = re.sub(r'(?<![选为是A-H、])([A-H](?:[、,，][A-H])*)(?:的)?(?:选项|项|说法|叙述)?(?:是|为)?(?:错误|不正确|不合理)(?!的?答案|的?回答)',
+                             incorrect_option, cleaned)
             cleaned = re.sub(r'(?:故|所以)?不正确的是\s*([A-H])',
                              lambda m: '' if m[1] in selected else m[0], cleaned)
     return bool(re.search(r'错误|有误|不正确|矛盾|不一致|不确定|看不清|存疑|无法确定|条件不足|有分歧|漏答', cleaned))
@@ -536,6 +548,10 @@ def _arithmetic_issue(text):
         if len(expression) > 120 or len(set(re.findall(r'kg|g|mL|L|mol', expression))) > 1:
             continue
         tail = text[match.end():match.end()+8]
+        # A unit can separate a numeric term from the rest of the RHS:
+        # "...=4.4g+4.4g=8.8g" must not be checked as "...=4.4".
+        if re.match(r'\s*(?:kg|g|mL|L|mol)\s*[+\-−×*/÷:：∶]', tail):
+            continue
         # Do not treat the numeric prefix of 36/M or 4+3 as the whole RHS.
         if re.match(r'\s*(?:%|[+\-−×*/÷:：∶]|[A-Za-z_])', tail) and not re.match(r'\s*(?:kg|g|mL|L|mol)(?![A-Za-z/])', tail):
             continue
@@ -604,7 +620,7 @@ def _equation_issue(text):
 
 
 def _call(system, data, images, role, independent=False):
-    preferred = 'deepseek' if independent and ai._glm_key and ai._ds_key else None
+    preferred = 'deepseek' if independent and (ai._glm_key or ai._kimi_key) and ai._ds_key else None
     options = {'response_validator': _plan_parts} if system == PLAN else {}
     if system == SOLVE:
         ids = [p['id'] for p in data['parts']]
@@ -620,7 +636,7 @@ def _call(system, data, images, role, independent=False):
     return ai.parse_model_json(raw), model
 
 
-def evaluate(snapshot, progress):
+def evaluate(snapshot, progress, resume=None):
     """No shared chat history: solvers never see any other solver's answer."""
     if banklib.is_exam_notice(snapshot['body']):
         raise ValueError('这条记录是试卷说明或相对原子质量表，不是待作答题目；请核对原文件和导入结果')
@@ -633,10 +649,14 @@ def evaluate(snapshot, progress):
         # Keep reviewed leaf identities stable when retrying unresolved subparts.
         plan = {'parts': [{k: p[k] for k in ('id', 'label', 'prompt')} for p in previous_parts]}
         model = 'saved-plan'
+    elif resume:
+        plan = {'parts': [{k: p[k] for k in ('id', 'label', 'prompt')}
+                          for p in resume['parts'] if re.fullmatch(r'p\d+', p['id'])]}
+        model = resume['plan_model']
     else:
         plan, model = _call(PLAN, stem, images, role)
     planned = _plan_parts(plan)
-    if not previous_parts:
+    if not previous_parts and not resume:
         planned = _refine_plan(planned, snapshot['qtype'], snapshot['body'])
     if len(planned) > 100:
         raise ValueError('作答位置过多，请先检查是否把几道题连在一起了')
@@ -644,11 +664,17 @@ def evaluate(snapshot, progress):
     request = dict(stem, parts=planned)
     solutions, failures, missing_parts = [], [], []
     unknown_coverage = False
+    new_solution = False
     for number in range(1, 4):
         progress('solve' + str(number))
         try:
             solver_role = 'pro' if number == 3 and not images else role
-            value, solver_model = _call(SOLVE, request, images, solver_role, independent=(number == 2))
+            cached = next((s for s in (resume or {}).get('solutions', []) if s['attempt'] == number), None)
+            if cached:
+                value, solver_model = cached, cached['model']
+            else:
+                new_solution = True
+                value, solver_model = _call(SOLVE, request, images, solver_role, independent=(number == 2))
             parts, missing, unclear = _solution_parts(value, ids)
             solutions.append({'attempt': number, 'model': solver_model, 'parts': parts,
                               'coverage_complete': value['coverage_complete'], 'missing_parts': missing})
@@ -662,13 +688,23 @@ def evaluate(snapshot, progress):
         try:
             # The judge gets the actual image again, not a previous model's description.
             judge_role = 'pro' if not images else role
-            judgement, judge_model = _call(JUDGE, dict(request, solutions=solutions), images, judge_role, independent=True)
+            if not new_solution and (resume or {}).get('judgement'):
+                judgement, judge_model = resume['judgement'], resume['judge_model']
+            else:
+                judgement, judge_model = _call(JUDGE, dict(request, solutions=solutions), images, judge_role, independent=True)
             _, missing, unclear = _judgement_parts(judgement, ids, [s['attempt'] for s in solutions])
             missing_parts.extend(missing)
             unknown_coverage |= unclear
         except (ai.ModelError, ValueError, TypeError, KeyError) as exc:
             judgement = {}
             judge_error = ai._safe_text(exc)
+    return _finalize(snapshot, planned, model, solutions, failures, judgement, judge_model,
+                     judge_error, missing_parts, unknown_coverage)
+
+
+def _finalize(snapshot, planned, model, solutions, failures, judgement, judge_model,
+              judge_error, missing_parts, unknown_coverage):
+    """Apply the same publication guards to fresh responses and recorded evidence."""
     judged = {p['id']: p for p in judgement.get('parts', [])}
     output = []
     for planned_part in planned:
@@ -760,6 +796,26 @@ def evaluate(snapshot, progress):
             'judge_error': judge_error, 'created_at': _now()}
 
 
+def recheck_evidence(snapshot, evidence):
+    """Reapply local guards without calling a model or discarding any evidence."""
+    planned = [{k: p[k] for k in ('id', 'label', 'prompt')} for p in evidence['parts']
+               if re.fullmatch(r'p\d+', p['id'])]
+    ids = [p['id'] for p in planned]
+    solutions = evidence['solutions']
+    missing, unclear = [], False
+    for solution in solutions:
+        _, extra, incomplete = _solution_parts(solution, ids)
+        missing.extend(extra)
+        unclear |= incomplete
+    judgement = evidence['judgement']
+    if judgement:
+        _, extra, incomplete = _judgement_parts(judgement, ids, [s['attempt'] for s in solutions])
+        missing.extend(extra)
+        unclear |= incomplete
+    return _finalize(snapshot, planned, evidence['plan_model'], solutions, evidence['failures'],
+                     judgement, evidence['judge_model'], evidence['judge_error'], missing, unclear)
+
+
 def run_job(con, job_id):
     _rows(con)
     job = con.execute('SELECT * FROM answer_jobs WHERE id=?', (job_id,)).fetchone()
@@ -771,8 +827,12 @@ def run_job(con, job_id):
         nonlocal last_phase
         last_phase = phase
         _phase(con, job_id, phase)
+    def cancelled():
+        current = con.execute('SELECT status FROM answer_jobs WHERE id=?', (job_id,)).fetchone()
+        return not current or current[0] != 'running'
     try:
-        result = evaluate(snapshot, progress)
+        with ai.provider_scope(None, cancel_check=cancelled):
+            result = evaluate(snapshot, progress)
         con.execute('BEGIN IMMEDIATE')
         try:
             active = con.execute('SELECT status FROM answer_jobs WHERE id=?', (job_id,)).fetchone()

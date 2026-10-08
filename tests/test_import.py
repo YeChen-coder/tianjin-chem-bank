@@ -53,6 +53,18 @@ def test_type(stem, section, expected):
     assert qa.qtype_info(stem, section)['qtype'] == expected
 
 
+@pytest.mark.parametrize('span', ['1～2', '1~2', '1—2', '1–2', '1-2', '1至2', '1到2'])
+def test_choice_section_with_numeric_answer_range_is_multiple(tmp_path, span):
+    heading = '二、选择题（本大题共5小题，每小题给出的四个选项中，有' + span + '个符合题意）'
+    qs = b.questions_from_docx(document(tmp_path, p(heading) + p('11．下列说法正确的是')
+                                      + p('A．甲 B．乙 C．丙 D．丁')))
+    assert len(qs) == 1 and qs[0]['qtype'] == '多选题'
+
+
+def test_numeric_range_in_marks_does_not_make_section_multiple():
+    assert qa.section_type('一、选择题（共1～2分，每小题只有一个符合题意）') == '单选题'
+
+
 def test_glued_first_paragraph(tmp_path):
     qs = b.questions_from_docx(document(tmp_path, p('1．请说明空气中的主要成分。\n2．请解释水的组成及测定方法。\n3．请写出氧气制取的化学方程式。')))
     assert [q['qnum'] for q in qs] == ['1', '2', '3']
@@ -151,6 +163,42 @@ def test_separate_answers(tmp_path):
     qs = b.questions_from_docx(document(tmp_path, p('1．说明水的组成及依据。') + p('2．说明氧气的制取方法。') + p('参考答案') + p('1．氢元素和氧元素。') + p('2．用过氧化氢制取。')))
     assert len(qs) == 2
     assert '氢元素' in qs[0]['answer'] and '过氧化氢' in qs[1]['answer']
+
+
+@pytest.mark.parametrize('heading', [
+    '2025-2026学年天津市河西区九年级下学期结课考化学参考答案',
+    '化学试题参考答案及评分标准',
+])
+def test_titled_answer_appendix_is_not_imported_as_questions(tmp_path, heading):
+    blocks = (p('1．说明水的组成及依据。') + p('2．说明氧气的制取方法。')
+              + p(heading) + p('一、简答题')
+              + p('1．氢元素和氧元素。') + p('2．用过氧化氢制取。'))
+    qs = b.questions_from_docx(document(tmp_path, blocks))
+    assert len(qs) == 2
+    assert '氢元素' in qs[0]['answer'] and '过氧化氢' in qs[1]['answer']
+
+
+def test_calculation_prompt_keeps_following_subquestions(tmp_path):
+    blocks = (p('六、计算题') + p('26．取含杂质的氯化铜样品15g，恰好完全反应。')
+              + p('计算：') + p('（1）样品中氯化铜的质量分数。')
+              + p('（2）所加溶液中溶质的质量分数。'))
+    qs = b.questions_from_docx(document(tmp_path, blocks))
+    assert len(qs) == 1 and qs[0]['qnum'] == '26'
+    assert '（1）样品中' in qs[0]['body'] and '（2）所加' in qs[0]['body']
+
+
+def test_reference_answer_mentioned_in_question_is_not_an_appendix(tmp_path):
+    qs = b.questions_from_docx(document(tmp_path, p('1．请指出化学参考答案中的错误。')
+                                       + p('说明理由并写出正确答案。')))
+    assert len(qs) == 1 and '说明理由' in qs[0]['body']
+
+
+def test_section_with_floating_picture_requests_source_review(tmp_path):
+    heading = p('四、简答题').replace('</w:p>', '<w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p>')
+    rel = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="media/p.png"/></Relationships>'
+    qs = b.questions_from_docx(document(tmp_path, heading + p('20．根据溶解度曲线回答下列问题。'),
+                                      {'word/_rels/document.xml.rels': rel, 'word/media/p.png': PNG}))
+    assert any('浮动图片' in warning for warning in qs[0]['warnings'])
 
 
 def test_question_table_and_option_table(tmp_path):

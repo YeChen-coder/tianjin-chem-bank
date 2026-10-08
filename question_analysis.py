@@ -21,7 +21,7 @@ def section_type(text):
     text = re.sub(r"\s+", "", text or "")
     for name in sorted(TYPE_NAMES, key=len, reverse=True):
         if re.match(r"^(?:[一二三四五六七八九十]+[、.．:：])?" + name + r"(?:[（(:：]|$)", text):
-            if TYPE_NAMES[name] == "单选题" and re.search(r"一或两|一个或两个|1个或2个|一至两|一到两|全部选对|选对但", text):
+            if TYPE_NAMES[name] == "单选题" and re.search(r"一或两|一个或两个|1个或2个|1[～~—–\-至到]2个|一至两|一到两|全部选对|选对但", text):
                 return "多选题"
             return TYPE_NAMES[name]
     return None

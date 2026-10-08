@@ -1,0 +1,27 @@
+# 复制为 keys.local；它被 Git 忽略，只用于本机。
+# 已有 keys.local 时，请将这些参数补进该文件，保留已有 key。
+KIMI_API_KEY=
+KIMI_MODEL=kimi-k2.6
+KIMI_MAX_TOKENS=32768
+KIMI_TIMEOUT=300
+# K2.x 启用 thinking；不发送不支持的 reasoning_effort。
+# 若改用 kimi-k3，则使用下列强度和 max_completion_tokens。
+KIMI_REASONING_EFFORT=high
+
+DEEPSEEK_API_KEY=
+DEEPSEEK_FLASH=deepseek-flash
+DEEPSEEK_PRO=deepseek-v4-pro
+DEEPSEEK_REASONING_EFFORT=high
+DEEPSEEK_MAX_TOKENS=32768
+DEEPSEEK_TIMEOUT=300
+
+# auto: 有 key 时优先 Kimi，再沿用 GLM / DeepSeek。
+# 指定 kimi / deepseek / glm 时，整个工作流程固定该服务，不跨服务回退。
+CHEM_AI_PROVIDER=auto
+GLM_API_KEY=
+GLM_FLASHX=glm-5.3-flashx
+GLM_FLASH=glm-5.3-flash
+GLM_PRO=glm-5.3
+# FlashX 优先；收到余额不足响应后用 Flash。GLM_FLASHX=off 可直接用 Flash。
+# 新手礼包阶段可将 CHEM_AI_PROVIDER 改为 glm；固定服务时仍支持 FlashX -> Flash。
+GLM_REASONING_EFFORT=high

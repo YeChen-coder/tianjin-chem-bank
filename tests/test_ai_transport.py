@@ -15,6 +15,9 @@ import aianswers as aa
 def reset_provider_cooldown(monkeypatch):
     monkeypatch.setattr(a, '_glm_pause_until', 0.0)
     monkeypatch.setattr(a, '_glm_pause_key', '')
+    # These tests cover the pre-existing Flash/DeepSeek transport path.
+    monkeypatch.setattr(a, '_glm_flashx', '')
+    monkeypatch.setattr(a, '_glm_flashx_pauses', {})
 
 
 def test_glm_has_explicit_reasoning_and_output_budget(monkeypatch):
@@ -100,6 +103,36 @@ def test_http_transport_reads_partial_chunks_without_waiting_for_8k(monkeypatch)
     monkeypatch.setattr(a.http.client, 'HTTPSConnection', Connection)
     status, payload = a._http_post('https://example.test/chat', 'fixture', {}, 90)
     assert status == 200 and a._message_text(payload) == '{}'
+
+
+def test_reasoning_transport_can_wait_beyond_glm_heartbeat_limit(monkeypatch):
+    clock = [0.0]
+    timeouts = []
+    class Socket:
+        def settimeout(self, value): timeouts.append(value)
+    class Response:
+        status = 200
+        def __init__(self): self.index = 0
+        def read1(self, size):
+            self.index += 1
+            if self.index == 1:
+                clock[0] = 1.0
+                return b': keep-alive\n'
+            if self.index == 2:
+                clock[0] = 65.0
+                return b'{"choices":[{"message":{"content":"{}"}}]}'
+            return b''
+    class Connection:
+        sock = Socket()
+        def __init__(self, *args, **kwargs): pass
+        def request(self, *args, **kwargs): pass
+        def getresponse(self): return Response()
+        def close(self): pass
+    monkeypatch.setattr(a.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(a.http.client, 'HTTPSConnection', Connection)
+    status, payload = a._http_post('https://example.test/chat', 'fixture', {}, 300, 300)
+    assert status == 200 and a._message_text(payload) == '{}'
+    assert timeouts[2] == 299.0
 
 
 def test_missing_generated_answer_falls_back_before_saving(monkeypatch):
@@ -225,7 +258,7 @@ def test_glm_quota_fallback_cooldown_and_recovery(monkeypatch):
     clock = [1.0]
     monkeypatch.setattr(a.time, 'monotonic', lambda: clock[0])
     calls = []
-    def http(url, key, body, timeout):
+    def http(url, key, body, timeout, keepalive_limit=None):
         calls.append(url)
         if 'open.bigmodel.cn' in url and calls.count(url) == 1:
             return 429, {'error': {'code': '1113', 'message': 'Insufficient balance'}}
@@ -255,7 +288,9 @@ def test_deepseek_format_retry_preserves_budget_and_vision(tmp_path, monkeypatch
     monkeypatch.setattr(a, '_post_chat', post)
     assert 'H2O' in a._deepseek_chat(a._ds_flash, 's', 'u', [str(image)])
     assert len(calls) == 2
-    assert all(body['thinking']['type'] == 'disabled' and body['max_tokens'] == 8192 for body in calls)
+    assert all(body['thinking']['type'] == 'enabled' and body['max_tokens'] == 32768
+               and body['reasoning_effort'] == 'high' for body in calls)
+    assert all(body['messages'][1]['content'][1]['image_url']['detail'] == 'original' for body in calls)
     assert all(len(body['messages'][1]['content']) == 2 for body in calls)
 
 
