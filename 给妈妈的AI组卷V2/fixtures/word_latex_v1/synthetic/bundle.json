@@ -1,0 +1,2077 @@
+{
+  "schema_version": 1,
+  "paper": {
+    "id": "paper-controls",
+    "title": "化学试卷排版控制样例",
+    "question_ids": [
+      "q-control-1",
+      "q-control-2",
+      "q-control-3",
+      "q-control-4"
+    ],
+    "source_sha256": null
+  },
+  "questions": [
+    {
+      "id": "q-control-1",
+      "revision": 0,
+      "number": "1",
+      "qtype": "化学控制样例",
+      "body": [
+        {
+          "id": "paragraph-8",
+          "type": "paragraph",
+          "align": "left",
+          "inlines": [
+            {
+              "id": "text-1",
+              "type": "text",
+              "text": "向50 mL溶液中加入"
+            },
+            {
+              "id": "formula-2",
+              "type": "formula",
+              "latex": "\\mathrm{NaOH}",
+              "status": "restored",
+              "source_ref": null
+            },
+            {
+              "id": "text-3",
+              "type": "text",
+              "text": "。水的化学式为 H"
+            },
+            {
+              "id": "text-4",
+              "type": "text",
+              "text": "2",
+              "style": {
+                "vertical": "subscript"
+              }
+            },
+            {
+              "id": "text-5",
+              "type": "text",
+              "text": "O，判断 "
+            },
+            {
+              "id": "formula-6",
+              "type": "formula",
+              "latex": "\\mathrm{pH}>7",
+              "status": "restored",
+              "source_ref": null
+            },
+            {
+              "id": "text-7",
+              "type": "text",
+              "text": "。"
+            }
+          ]
+        },
+        {
+          "id": "paragraph-13",
+          "type": "paragraph",
+          "align": "left",
+          "inlines": [
+            {
+              "id": "text-9",
+              "type": "text",
+              "text": "括号组："
+            },
+            {
+              "id": "formula-10",
+              "type": "formula",
+              "latex": "\\mathrm{Ca}_{3}{(\\mathrm{PO}_{4})}_{2}",
+              "status": "restored",
+              "source_ref": null
+            },
+            {
+              "id": "text-11",
+              "type": "text",
+              "text": "；离子："
+            },
+            {
+              "id": "formula-12",
+              "type": "formula",
+              "latex": "\\mathrm{SO}_{4}^{2-}",
+              "status": "restored",
+              "source_ref": null
+            }
+          ]
+        },
+        {
+          "id": "paragraph-15",
+          "type": "paragraph",
+          "align": "left",
+          "inlines": [
+            {
+              "id": "formula-14",
+              "type": "formula",
+              "latex": "\\mathrm{CaCO}_{3}\\overset{900^{\\circ}\\mathrm{C}}{=}\\mathrm{CaO}+\\mathrm{CO}_{2}\\uparrow",
+              "status": "restored",
+              "source_ref": null
+            }
+          ]
+        }
+      ],
+      "options": [
+        {
+          "id": "option-16",
+          "label": "A",
+          "blocks": [
+            {
+              "id": "paragraph-18",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-17",
+                  "type": "text",
+                  "text": "选项 A"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "option-19",
+          "label": "B",
+          "blocks": [
+            {
+              "id": "paragraph-21",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-20",
+                  "type": "text",
+                  "text": "选项 B"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "option-22",
+          "label": "C",
+          "blocks": [
+            {
+              "id": "paragraph-25",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-23",
+                  "type": "text",
+                  "text": "选项 C"
+                },
+                {
+                  "id": "image-24",
+                  "type": "image",
+                  "asset_id": "asset-9b9dc9990f183b224dbdccda726b38826ab8a4af23fc58e3f49a574755d03431",
+                  "width_mm": 40,
+                  "height_mm": 20
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "option-26",
+          "label": "D",
+          "blocks": [
+            {
+              "id": "paragraph-28",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-27",
+                  "type": "text",
+                  "text": "选项 D"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "subquestions": [],
+      "answers": [],
+      "explanations": [],
+      "source": {
+        "source_sha256": null,
+        "number": "1",
+        "locator": "synthetic-control"
+      },
+      "origin": "import",
+      "issues": []
+    },
+    {
+      "id": "q-control-2",
+      "revision": 0,
+      "number": "2",
+      "qtype": "化学控制样例",
+      "body": [
+        {
+          "id": "paragraph-34",
+          "type": "paragraph",
+          "align": "left",
+          "inlines": [
+            {
+              "id": "text-33",
+              "type": "text",
+              "text": "观察下图并回答两个小问。"
+            }
+          ]
+        },
+        {
+          "id": "image-35",
+          "type": "image",
+          "asset_id": "asset-9b9dc9990f183b224dbdccda726b38826ab8a4af23fc58e3f49a574755d03431",
+          "width_mm": 40,
+          "height_mm": 20,
+          "align": "center"
+        }
+      ],
+      "options": [],
+      "subquestions": [
+        {
+          "id": "subquestion-30",
+          "label": "（1）",
+          "blocks": [
+            {
+              "id": "paragraph-32",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-31",
+                  "type": "text",
+                  "text": "填写现象："
+                },
+                {
+                  "id": "blank-29",
+                  "type": "blank",
+                  "width_mm": 25
+                }
+              ]
+            }
+          ],
+          "subquestions": []
+        },
+        {
+          "id": "subquestion-36",
+          "label": "（2）",
+          "blocks": [
+            {
+              "id": "paragraph-39",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-37",
+                  "type": "text",
+                  "text": "写出水的化学式："
+                },
+                {
+                  "id": "formula-38",
+                  "type": "formula",
+                  "latex": "\\mathrm{H}_{2}\\mathrm{O}",
+                  "status": "restored",
+                  "source_ref": null
+                }
+              ]
+            },
+            {
+              "id": "image-40",
+              "type": "image",
+              "asset_id": "asset-9b9dc9990f183b224dbdccda726b38826ab8a4af23fc58e3f49a574755d03431",
+              "width_mm": 40,
+              "height_mm": 20,
+              "align": "center"
+            }
+          ],
+          "subquestions": []
+        }
+      ],
+      "answers": [
+        {
+          "id": "answer-41",
+          "target_id": "blank-29",
+          "blocks": [
+            {
+              "id": "paragraph-43",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-42",
+                  "type": "text",
+                  "text": "有气泡产生。"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "answer-44",
+          "target_id": "subquestion-36",
+          "blocks": [
+            {
+              "id": "paragraph-46",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "formula-45",
+                  "type": "formula",
+                  "latex": "\\mathrm{H}_{2}\\mathrm{O}",
+                  "status": "restored",
+                  "source_ref": null
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "explanations": [
+        {
+          "id": "explanation-47",
+          "target_id": "subquestion-30",
+          "blocks": [
+            {
+              "id": "paragraph-49",
+              "type": "paragraph",
+              "align": "left",
+              "inlines": [
+                {
+                  "id": "text-48",
+                  "type": "text",
+                  "text": "答案与作答空及小问分别关联。"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "source": {
+        "source_sha256": null,
+        "number": "2",
+        "locator": "synthetic-control"
+      },
+      "origin": "import",
+      "issues": []
+    },
+    {
+      "id": "q-control-3",
+      "revision": 0,
+      "number": "3",
+      "qtype": "化学控制样例",
+      "body": [
+        {
+          "id": "paragraph-72",
+          "type": "paragraph",
+          "align": "left",
+          "inlines": [
+            {
+              "id": "text-71",
+              "type": "text",
+              "text": "比较表格中的内容。"
+            }
+          ]
+        },
+        {
+          "id": "table-50",
+          "type": "table",
+          "columns_mm": [
+            40,
+            60,
+            60
+          ],
+          "rows": [
+            {
+              "id": "row-54",
+              "cells": [
+                {
+                  "id": "cell-53",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 3,
+                  "blocks": [
+                    {
+                      "id": "paragraph-52",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-51",
+                          "type": "text",
+                          "text": "合并表头"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-63",
+              "cells": [
+                {
+                  "id": "cell-57",
+                  "col_index": 0,
+                  "row_span": 2,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-56",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-55",
+                          "type": "text",
+                          "text": "跨两行"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-60",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-59",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "formula-58",
+                          "type": "formula",
+                          "latex": "\\mathrm{H}_{2}\\mathrm{O}",
+                          "status": "restored",
+                          "source_ref": null
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-62",
+                  "col_index": 2,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "image-61",
+                      "type": "image",
+                      "asset_id": "asset-9b9dc9990f183b224dbdccda726b38826ab8a4af23fc58e3f49a574755d03431",
+                      "width_mm": 40,
+                      "height_mm": 20,
+                      "align": "center"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-70",
+              "cells": [
+                {
+                  "id": "cell-66",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-65",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-64",
+                          "type": "text",
+                          "text": "文字与上下标"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-69",
+                  "col_index": 2,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-68",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "formula-67",
+                          "type": "formula",
+                          "latex": "x^{2}",
+                          "status": "restored",
+                          "source_ref": null
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "options": [],
+      "subquestions": [],
+      "answers": [],
+      "explanations": [],
+      "source": {
+        "source_sha256": null,
+        "number": "3",
+        "locator": "synthetic-control"
+      },
+      "origin": "import",
+      "issues": []
+    },
+    {
+      "id": "q-control-4",
+      "revision": 0,
+      "number": "4",
+      "qtype": "化学控制样例",
+      "body": [
+        {
+          "id": "paragraph-306",
+          "type": "paragraph",
+          "align": "left",
+          "inlines": [
+            {
+              "id": "text-305",
+              "type": "text",
+              "text": "长表格分页控制。"
+            }
+          ]
+        },
+        {
+          "id": "table-73",
+          "type": "table",
+          "columns_mm": [
+            30,
+            140
+          ],
+          "rows": [
+            {
+              "id": "row-80",
+              "cells": [
+                {
+                  "id": "cell-76",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-75",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-74",
+                          "type": "text",
+                          "text": "序号"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-79",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-78",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-77",
+                          "type": "text",
+                          "text": "跨页表格内容"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-87",
+              "cells": [
+                {
+                  "id": "cell-83",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-82",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-81",
+                          "type": "text",
+                          "text": "1"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-86",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-85",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-84",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-94",
+              "cells": [
+                {
+                  "id": "cell-90",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-89",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-88",
+                          "type": "text",
+                          "text": "2"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-93",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-92",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-91",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-101",
+              "cells": [
+                {
+                  "id": "cell-97",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-96",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-95",
+                          "type": "text",
+                          "text": "3"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-100",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-99",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-98",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-108",
+              "cells": [
+                {
+                  "id": "cell-104",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-103",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-102",
+                          "type": "text",
+                          "text": "4"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-107",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-106",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-105",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-115",
+              "cells": [
+                {
+                  "id": "cell-111",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-110",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-109",
+                          "type": "text",
+                          "text": "5"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-114",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-113",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-112",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-122",
+              "cells": [
+                {
+                  "id": "cell-118",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-117",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-116",
+                          "type": "text",
+                          "text": "6"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-121",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-120",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-119",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-129",
+              "cells": [
+                {
+                  "id": "cell-125",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-124",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-123",
+                          "type": "text",
+                          "text": "7"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-128",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-127",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-126",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-136",
+              "cells": [
+                {
+                  "id": "cell-132",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-131",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-130",
+                          "type": "text",
+                          "text": "8"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-135",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-134",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-133",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-143",
+              "cells": [
+                {
+                  "id": "cell-139",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-138",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-137",
+                          "type": "text",
+                          "text": "9"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-142",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-141",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-140",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-150",
+              "cells": [
+                {
+                  "id": "cell-146",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-145",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-144",
+                          "type": "text",
+                          "text": "10"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-149",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-148",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-147",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-157",
+              "cells": [
+                {
+                  "id": "cell-153",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-152",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-151",
+                          "type": "text",
+                          "text": "11"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-156",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-155",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-154",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-164",
+              "cells": [
+                {
+                  "id": "cell-160",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-159",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-158",
+                          "type": "text",
+                          "text": "12"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-163",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-162",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-161",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-171",
+              "cells": [
+                {
+                  "id": "cell-167",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-166",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-165",
+                          "type": "text",
+                          "text": "13"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-170",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-169",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-168",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-178",
+              "cells": [
+                {
+                  "id": "cell-174",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-173",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-172",
+                          "type": "text",
+                          "text": "14"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-177",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-176",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-175",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-185",
+              "cells": [
+                {
+                  "id": "cell-181",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-180",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-179",
+                          "type": "text",
+                          "text": "15"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-184",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-183",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-182",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-192",
+              "cells": [
+                {
+                  "id": "cell-188",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-187",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-186",
+                          "type": "text",
+                          "text": "16"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-191",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-190",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-189",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-199",
+              "cells": [
+                {
+                  "id": "cell-195",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-194",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-193",
+                          "type": "text",
+                          "text": "17"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-198",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-197",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-196",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-206",
+              "cells": [
+                {
+                  "id": "cell-202",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-201",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-200",
+                          "type": "text",
+                          "text": "18"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-205",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-204",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-203",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-213",
+              "cells": [
+                {
+                  "id": "cell-209",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-208",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-207",
+                          "type": "text",
+                          "text": "19"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-212",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-211",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-210",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-220",
+              "cells": [
+                {
+                  "id": "cell-216",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-215",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-214",
+                          "type": "text",
+                          "text": "20"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-219",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-218",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-217",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-227",
+              "cells": [
+                {
+                  "id": "cell-223",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-222",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-221",
+                          "type": "text",
+                          "text": "21"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-226",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-225",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-224",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-234",
+              "cells": [
+                {
+                  "id": "cell-230",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-229",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-228",
+                          "type": "text",
+                          "text": "22"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-233",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-232",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-231",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-241",
+              "cells": [
+                {
+                  "id": "cell-237",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-236",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-235",
+                          "type": "text",
+                          "text": "23"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-240",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-239",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-238",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-248",
+              "cells": [
+                {
+                  "id": "cell-244",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-243",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-242",
+                          "type": "text",
+                          "text": "24"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-247",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-246",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-245",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-255",
+              "cells": [
+                {
+                  "id": "cell-251",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-250",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-249",
+                          "type": "text",
+                          "text": "25"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-254",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-253",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-252",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-262",
+              "cells": [
+                {
+                  "id": "cell-258",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-257",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-256",
+                          "type": "text",
+                          "text": "26"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-261",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-260",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-259",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-269",
+              "cells": [
+                {
+                  "id": "cell-265",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-264",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-263",
+                          "type": "text",
+                          "text": "27"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-268",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-267",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-266",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-276",
+              "cells": [
+                {
+                  "id": "cell-272",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-271",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-270",
+                          "type": "text",
+                          "text": "28"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-275",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-274",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-273",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-283",
+              "cells": [
+                {
+                  "id": "cell-279",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-278",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-277",
+                          "type": "text",
+                          "text": "29"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-282",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-281",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-280",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-290",
+              "cells": [
+                {
+                  "id": "cell-286",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-285",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-284",
+                          "type": "text",
+                          "text": "30"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-289",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-288",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-287",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-297",
+              "cells": [
+                {
+                  "id": "cell-293",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-292",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-291",
+                          "type": "text",
+                          "text": "31"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-296",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-295",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-294",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "row-304",
+              "cells": [
+                {
+                  "id": "cell-300",
+                  "col_index": 0,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-299",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-298",
+                          "type": "text",
+                          "text": "32"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "cell-303",
+                  "col_index": 1,
+                  "row_span": 1,
+                  "col_span": 1,
+                  "blocks": [
+                    {
+                      "id": "paragraph-302",
+                      "type": "paragraph",
+                      "align": "left",
+                      "inlines": [
+                        {
+                          "id": "text-301",
+                          "type": "text",
+                          "text": "观察并记录实验现象，保留每行内容与表格结构。"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "options": [],
+      "subquestions": [],
+      "answers": [],
+      "explanations": [],
+      "source": {
+        "source_sha256": null,
+        "number": "4",
+        "locator": "synthetic-control"
+      },
+      "origin": "import",
+      "issues": []
+    }
+  ],
+  "assets": [
+    {
+      "id": "asset-9b9dc9990f183b224dbdccda726b38826ab8a4af23fc58e3f49a574755d03431",
+      "sha256": "9b9dc9990f183b224dbdccda726b38826ab8a4af23fc58e3f49a574755d03431",
+      "mime_type": "image/png",
+      "preview_url": "/api/v2/content/assets/asset-9b9dc9990f183b224dbdccda726b38826ab8a4af23fc58e3f49a574755d03431"
+    }
+  ],
+  "issues": []
+}

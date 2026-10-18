@@ -1,0 +1,44 @@
+/* The original bank remains the layout owner; the editor is embedded in a card. */
+:root{--qe-green:#0f4c81;--qe-ink:#223;--qe-soft:#f4f7fb}
+#bank-status{padding:8px 20px;font-size:13px;color:#0f4c81;background:#fff}
+#bank-status:empty{display:none}
+#bank-status.error{color:#a33}
+.bank-content{white-space:normal;font-size:15px;line-height:1.55;color:#1c1c1c}
+.bank-content .qe-paragraph{margin:2px 0;padding:0;min-height:1.55em;overflow-x:visible}
+.bank-content .qe-options{display:flex;flex-direction:column;gap:2px;margin:4px 0}
+.bank-content .qe-option{gap:4px;grid-template-columns:20px minmax(0,1fr);align-items:first baseline}
+.bank-content .qe-label{padding:0;color:inherit;font-weight:normal}
+.bank-content .qe-subquestion{margin:4px 0;padding:0;border:0}
+.bank-content .qe-sub-label{font-weight:normal;float:left;margin-right:4px}
+.bank-content .qe-formula{overflow:visible;padding:0 2px;vertical-align:baseline;max-width:none}
+.bank-content .qe-image{margin:4px 0}
+.bank-content .qe-image img,.bank-content .qe-inline-image img{max-width:min(100%,420px);max-height:none;height:auto;object-fit:contain}
+.bank-content .qe-table-scroll{margin:6px 0}
+.bank-content .qe-table td{padding:4px 8px}
+.bank-content .qe-scroll-hint{display:none}
+.bank-content .qe-answers,.bank-content .qe-explanations{background:transparent;padding:0;border:0}
+.bank-content .qe-target{font-size:12px;color:#667}
+.bank-content .qe-answer-part{margin:6px 0}
+.bank-editor{margin-top:8px}
+.bank-editor .qe-card{border-radius:6px;margin:0;padding:12px 14px;box-shadow:none;background:#fff}
+.bank-editor .qe-card-header{background:transparent;color:#223;padding:0;margin-bottom:8px}
+.bank-editor .qe-card-header h3{font-size:15px}
+.bank-editor .qe-content{font-family:inherit;font-size:15px;line-height:1.65}
+.bank-editor .qe-content .qe-paragraph{margin:4px 0}
+.bank-editor .qe-option{align-items:first baseline}
+.bank-editor .qe-image{margin:6px 0}
+.bank-editor .qe-message:empty{display:none}
+.bank-editor .qe-toolbar button{font-size:13px;padding:5px 8px}
+.bank-editor .qe-toolbar button:last-child{display:none}
+.bank-editor .qe-toolbar .qe-primary{background:#0f4c81;color:#fff}
+.bank-editor-close{margin:6px 0}
+.qe-dialog{color:#223;font-family:inherit}
+.qe-dialog .qe-primary{background:#0f4c81;color:#fff}
+.aibox .bank-feedback{width:min(680px,100%);box-sizing:border-box;font:inherit;font-size:13px;padding:6px;border:1px solid #cfd5dc;border-radius:5px;display:block;margin:6px 0;min-height:60px}
+.aibox .bank-ai-status{font-size:13px;color:#556;margin:6px 0}
+.aiver .bank-version-tools{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.bank-read-formula{cursor:pointer}
+.bank-read-formula:hover{background:#e4edf6;outline:1px solid #c5d0dc}
+.pager{flex-wrap:wrap}
+.pager button,.pager label,.pager #pageinfo{white-space:nowrap;flex-shrink:0}
+@media(max-width:600px){.bar{position:static;padding:10px}.papers,.stats,#bank-status{padding-left:10px;padding-right:10px}main{padding:8px 10px 30px}.bank-content .qe-image img{max-width:100%}.bank-editor .qe-card{padding:10px}.bank-editor .qe-content{font-size:15px}}

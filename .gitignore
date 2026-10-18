@@ -32,3 +32,9 @@ keys.local
 
 # local bot plans contain real question selections
 .bot-plans/
+
+# private source papers and runtime workspaces
+chem-papers/
+.work/
+*.doc
+*.db

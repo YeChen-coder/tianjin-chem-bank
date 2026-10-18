@@ -1,0 +1,58 @@
+{
+  "\\mathrm{CaCO}_{3}\\overset{900^{\\circ}\\mathrm{C}}{=}\\mathrm{CaO}+\\mathrm{CO}_{2}\\uparrow": {
+    "ok": true,
+    "latex": "\\mathrm{CaCO}_{3}\\overset{900^{\\circ}\\mathrm{C}}{=}\\mathrm{CaO}+\\mathrm{CO}_{2}\\uparrow",
+    "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mrow><msub><mrow><mi mathvariant=\"normal\">C</mi><mi mathvariant=\"normal\">a</mi><mi mathvariant=\"normal\">C</mi><mi mathvariant=\"normal\">O</mi></mrow><mrow><mn>3</mn></mrow></msub><mover><mrow><mo>=</mo></mrow><mrow><msup><mn>900</mn><mrow><mo>∘</mo></mrow></msup><mrow><mi mathvariant=\"normal\">C</mi></mrow></mrow></mover><mrow><mi mathvariant=\"normal\">C</mi><mi mathvariant=\"normal\">a</mi><mi mathvariant=\"normal\">O</mi></mrow><mo>+</mo><msub><mrow><mi mathvariant=\"normal\">C</mi><mi mathvariant=\"normal\">O</mi></mrow><mrow><mn>2</mn></mrow></msub><mo>↑</mo></mrow></math>",
+    "omml": "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:sSub><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>CaCO</m:t></m:r></m:e><m:sub><m:r><m:t>3</m:t></m:r></m:sub></m:sSub><m:limUpp><m:e><m:r><m:t>=</m:t></m:r></m:e><m:lim><m:sSup><m:e><m:r><m:t>900</m:t></m:r></m:e><m:sup><m:r><m:t>∘</m:t></m:r></m:sup></m:sSup><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>C</m:t></m:r></m:lim></m:limUpp><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>CaO</m:t></m:r><m:r><m:t>+</m:t></m:r><m:sSub><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>CO</m:t></m:r></m:e><m:sub><m:r><m:t>2</m:t></m:r></m:sub></m:sSub><m:r><m:t>↑</m:t></m:r></m:oMath>",
+    "compiler_version": "s4-latex2mathml-3.78.1-v2/fdbb663cbbf0ab0b",
+    "diagnostics": []
+  },
+  "\\mathrm{Ca}_{3}{(\\mathrm{PO}_{4})}_{2}": {
+    "ok": true,
+    "latex": "\\mathrm{Ca}_{3}{(\\mathrm{PO}_{4})}_{2}",
+    "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mrow><msub><mrow><mi mathvariant=\"normal\">C</mi><mi mathvariant=\"normal\">a</mi></mrow><mrow><mn>3</mn></mrow></msub><msub><mrow><mo stretchy=\"false\">(</mo><msub><mrow><mi mathvariant=\"normal\">P</mi><mi mathvariant=\"normal\">O</mi></mrow><mrow><mn>4</mn></mrow></msub><mo stretchy=\"false\">)</mo></mrow><mrow><mn>2</mn></mrow></msub></mrow></math>",
+    "omml": "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:sSub><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>Ca</m:t></m:r></m:e><m:sub><m:r><m:t>3</m:t></m:r></m:sub></m:sSub><m:sSub><m:e><m:d><m:dPr><m:sepChr m:val=\"\"/></m:dPr><m:e><m:sSub><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>PO</m:t></m:r></m:e><m:sub><m:r><m:t>4</m:t></m:r></m:sub></m:sSub></m:e></m:d></m:e><m:sub><m:r><m:t>2</m:t></m:r></m:sub></m:sSub></m:oMath>",
+    "compiler_version": "s4-latex2mathml-3.78.1-v2/fdbb663cbbf0ab0b",
+    "diagnostics": []
+  },
+  "\\mathrm{H}_{2}\\mathrm{O}": {
+    "ok": true,
+    "latex": "\\mathrm{H}_{2}\\mathrm{O}",
+    "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mrow><msub><mrow><mi mathvariant=\"normal\">H</mi></mrow><mrow><mn>2</mn></mrow></msub><mrow><mi mathvariant=\"normal\">O</mi></mrow></mrow></math>",
+    "omml": "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:sSub><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>H</m:t></m:r></m:e><m:sub><m:r><m:t>2</m:t></m:r></m:sub></m:sSub><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>O</m:t></m:r></m:oMath>",
+    "compiler_version": "s4-latex2mathml-3.78.1-v2/fdbb663cbbf0ab0b",
+    "diagnostics": []
+  },
+  "\\mathrm{NaOH}": {
+    "ok": true,
+    "latex": "\\mathrm{NaOH}",
+    "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mrow><mrow><mi mathvariant=\"normal\">N</mi><mi mathvariant=\"normal\">a</mi><mi mathvariant=\"normal\">O</mi><mi mathvariant=\"normal\">H</mi></mrow></mrow></math>",
+    "omml": "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>NaOH</m:t></m:r></m:oMath>",
+    "compiler_version": "s4-latex2mathml-3.78.1-v2/fdbb663cbbf0ab0b",
+    "diagnostics": []
+  },
+  "\\mathrm{SO}_{4}^{2-}": {
+    "ok": true,
+    "latex": "\\mathrm{SO}_{4}^{2-}",
+    "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mrow><msubsup><mrow><mi mathvariant=\"normal\">S</mi><mi mathvariant=\"normal\">O</mi></mrow><mrow><mn>4</mn></mrow><mrow><mn>2</mn><mo>−</mo></mrow></msubsup></mrow></math>",
+    "omml": "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:sSubSup><m:e><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>SO</m:t></m:r></m:e><m:sub><m:r><m:t>4</m:t></m:r></m:sub><m:sup><m:r><m:t>2−</m:t></m:r></m:sup></m:sSubSup></m:oMath>",
+    "compiler_version": "s4-latex2mathml-3.78.1-v2/fdbb663cbbf0ab0b",
+    "diagnostics": []
+  },
+  "\\mathrm{pH}>7": {
+    "ok": true,
+    "latex": "\\mathrm{pH}>7",
+    "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mrow><mrow><mi mathvariant=\"normal\">p</mi><mi mathvariant=\"normal\">H</mi></mrow><mo>&gt;</mo><mn>7</mn></mrow></math>",
+    "omml": "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>pH</m:t></m:r><m:r><m:t>&gt;7</m:t></m:r></m:oMath>",
+    "compiler_version": "s4-latex2mathml-3.78.1-v2/fdbb663cbbf0ab0b",
+    "diagnostics": []
+  },
+  "x^{2}": {
+    "ok": true,
+    "latex": "x^{2}",
+    "mathml": "<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"inline\"><mrow><msup><mi>x</mi><mrow><mn>2</mn></mrow></msup></mrow></math>",
+    "omml": "<m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup></m:oMath>",
+    "compiler_version": "s4-latex2mathml-3.78.1-v2/fdbb663cbbf0ab0b",
+    "diagnostics": []
+  }
+}
